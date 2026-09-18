@@ -1,0 +1,33 @@
+PATIENT ID: SYN-PAT-001
+PATIENT NAME: Arjun Mehta
+DATA TYPE: SYNTHETIC / FICTIONAL — created for RAG development and testing
+YEAR: 2014
+AGE: 31
+
+=== ANNUAL CLINICAL SUMMARY ===
+11-Feb-2014 — Routine examination.
+Weight 82 kg; BMI 26.5.
+BP 126/82.
+Patient reports snoring but no witnessed apneas and no daytime sleepiness.
+
+Labs:
+- Fasting glucose 99 mg/dL
+- HbA1c 5.5%
+- LDL-C 128 mg/dL
+- HDL-C 46 mg/dL
+- TG 145 mg/dL
+- Creatinine 1.0 mg/dL
+- eGFR 94
+- ALT 32 U/L
+
+Assessment:
+- Overweight
+- Dyslipidemia, lifestyle management
+- Glucose at upper end of normal
+
+Plan: Dietary counseling; 5–7% weight reduction target; regular exercise; repeat fasting labs.
+
+No chronic medications.
+
+=== RAG-RELEVANT FACTS ===
+Metabolic risk factors are beginning to cluster: increasing BMI, LDL, triglycerides, and fasting glucose, but no formal diabetes diagnosis.

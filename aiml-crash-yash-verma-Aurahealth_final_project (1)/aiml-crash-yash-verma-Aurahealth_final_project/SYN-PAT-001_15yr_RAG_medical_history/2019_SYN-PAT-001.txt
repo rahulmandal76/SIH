@@ -1,0 +1,35 @@
+PATIENT ID: SYN-PAT-001
+PATIENT NAME: Arjun Mehta
+DATA TYPE: SYNTHETIC / FICTIONAL — created for RAG development and testing
+YEAR: 2019
+AGE: 36
+
+=== CLINICAL EVENTS ===
+20-Feb-2019 — Follow-up.
+Weight 95 kg; BMI 30.7.
+BP 132/84.
+Medications: Amlodipine 5 mg daily; rosuvastatin 10 mg nightly.
+
+Labs:
+- HbA1c 6.8%
+- Fasting glucose 128 mg/dL
+- LDL-C 91 mg/dL
+- HDL-C 42 mg/dL
+- TG 171 mg/dL
+- Creatinine 1.1 mg/dL
+- eGFR 84
+- Urine ACR 11 mg/g
+
+Assessment: Findings meet criteria for type 2 diabetes mellitus in this synthetic longitudinal scenario.
+
+Treatment:
+Metformin extended-release 500 mg with evening meal started; planned titration to 1000 mg daily as tolerated.
+Amlodipine and rosuvastatin continued.
+Diabetes education provided.
+
+17-Jun-2019 — Repeat HbA1c 6.5% after metformin initiation. No hypoglycemia. Weight 93 kg.
+
+02-Dec-2019 — HbA1c 6.2%. No neuropathic symptoms. Foot exam normal.
+
+=== RAG-RELEVANT FACTS ===
+2019: transition from prediabetes to diagnosed type 2 diabetes. Metformin initiated. Lipids improved after rosuvastatin. Kidney function mildly lower than earlier years but still preserved.

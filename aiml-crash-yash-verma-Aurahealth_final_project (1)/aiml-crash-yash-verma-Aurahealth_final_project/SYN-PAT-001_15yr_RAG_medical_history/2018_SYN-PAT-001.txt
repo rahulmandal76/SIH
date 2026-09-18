@@ -1,0 +1,34 @@
+PATIENT ID: SYN-PAT-001
+PATIENT NAME: Arjun Mehta
+DATA TYPE: SYNTHETIC / FICTIONAL — created for RAG development and testing
+YEAR: 2018
+AGE: 35
+
+=== CLINICAL EVENTS ===
+03-May-2018 — Preventive/chronic disease visit.
+Weight 92 kg; BMI 29.7.
+BP 130/82.
+Patient reports sedentary work, increased portion sizes, and difficulty maintaining exercise.
+
+Labs:
+- HbA1c 6.3%
+- Fasting glucose 119 mg/dL
+- LDL-C 151 mg/dL
+- HDL-C 40 mg/dL
+- TG 205 mg/dL
+- Creatinine 1.0 mg/dL
+- eGFR 89
+- Urine ACR 9 mg/g
+
+Assessment:
+- Hypertension, controlled.
+- Prediabetes approaching diabetes threshold.
+- Persistent dyslipidemia.
+- Obesity/near-obesity range by BMI.
+
+Medication change:
+Rosuvastatin 10 mg nightly started after shared decision-making for persistent LDL elevation and increasing metabolic risk.
+Amlodipine 5 mg continued.
+
+=== RAG-RELEVANT FACTS ===
+2018 is the first year a statin is initiated. HbA1c increased to 6.3%. No glucose-lowering medication started.

@@ -1,0 +1,38 @@
+PATIENT ID: SYN-PAT-001
+PATIENT NAME: Arjun Mehta
+DATA TYPE: SYNTHETIC / FICTIONAL — created for RAG development and testing
+YEAR: 2016
+AGE: 33
+
+=== CLINICAL EVENTS ===
+14-Apr-2016 — Follow-up for elevated BP and lipids.
+Weight 88 kg; BMI 28.4.
+Clinic BP 138/88, repeated 136/86.
+No end-organ symptoms.
+
+Labs:
+- Fasting glucose 106 mg/dL
+- HbA1c 5.8%
+- LDL-C 141 mg/dL
+- HDL-C 43 mg/dL
+- TG 175 mg/dL
+- Creatinine 1.0 mg/dL
+- eGFR 91
+- ALT 34 U/L
+
+Assessment:
+- Probable early essential hypertension based on repeated elevated readings.
+- Prediabetes.
+- Persistent mixed dyslipidemia.
+
+Treatment:
+Amlodipine 5 mg once daily started.
+Continued lifestyle counseling.
+No lipid-lowering drug initiated due to overall risk profile and young age.
+
+08-Dec-2016 — BP improved to 126/80 on amlodipine.
+No edema or dizziness reported.
+Weight 86 kg.
+
+=== RAG-RELEVANT FACTS ===
+First chronic antihypertensive medication: amlodipine 5 mg daily, initiated in 2016. Kidney function remained normal.

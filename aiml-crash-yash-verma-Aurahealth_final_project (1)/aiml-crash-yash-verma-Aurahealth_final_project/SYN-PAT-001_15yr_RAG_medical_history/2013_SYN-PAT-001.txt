@@ -1,0 +1,32 @@
+PATIENT ID: SYN-PAT-001
+PATIENT NAME: Arjun Mehta
+DATA TYPE: SYNTHETIC / FICTIONAL — created for RAG development and testing
+YEAR: 2013
+AGE: 30
+
+=== CLINICAL EVENTS ===
+04-Apr-2013 — Annual physical.
+Weight: 79 kg; BMI 25.5.
+BP: 124/80.
+Assessment: Overweight by BMI with gradually reduced activity.
+
+Labs:
+- Fasting glucose 96 mg/dL
+- HbA1c 5.3%
+- LDL-C 121 mg/dL
+- HDL-C 48 mg/dL
+- TG 128 mg/dL
+- Creatinine 0.9 mg/dL
+- eGFR >90
+- ALT 29 U/L
+
+15-Sep-2013 — Acute viral upper respiratory infection.
+Symptoms: Sore throat, cough, rhinorrhea for 4 days; no dyspnea.
+Vitals stable.
+Treatment: Supportive care; acetaminophen as needed.
+No antibiotics because illness was clinically consistent with viral URI and patient reports penicillin allergy.
+
+No admissions or procedures.
+
+=== RAG-RELEVANT FACTS ===
+Weight and LDL gradually increased over several years. Glycemia remained in the normal range.

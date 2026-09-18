@@ -1,0 +1,37 @@
+PATIENT ID: SYN-PAT-001
+PATIENT NAME: Arjun Mehta
+DATA TYPE: SYNTHETIC / FICTIONAL — created for RAG development and testing
+YEAR: 2021
+AGE: 38
+
+=== CLINICAL EVENTS ===
+11-Mar-2021 — Annual diabetes and hypertension review.
+Weight 99 kg; BMI 31.9.
+BP 134/82.
+
+Labs:
+- HbA1c 6.7%
+- Fasting glucose 126 mg/dL
+- LDL-C 86 mg/dL
+- HDL-C 42 mg/dL
+- TG 168 mg/dL
+- Creatinine 1.2 mg/dL
+- eGFR 77
+- Urine ACR 15 mg/g
+
+Assessment:
+1. Type 2 diabetes, slightly worsened control.
+2. Essential hypertension.
+3. Dyslipidemia.
+4. Obesity.
+5. Mild decline in eGFR compared with early baseline.
+
+Treatment:
+Metformin XR increased to 1500 mg daily.
+Amlodipine 5 mg daily continued.
+Rosuvastatin 10 mg nightly continued.
+
+30-Oct-2021 — HbA1c 6.5%. Weight 96 kg. BP 128/80. No hypoglycemia.
+
+=== RAG-RELEVANT FACTS ===
+By 2021, eGFR had declined from >90 historically to the high 70s, but urine albumin remained low. This represents an important longitudinal renal trend.

@@ -1,0 +1,51 @@
+PATIENT ID: SYN-PAT-001
+PATIENT NAME: Arjun Mehta
+DATA TYPE: SYNTHETIC / FICTIONAL — created for RAG development and testing
+YEAR: 2010
+AGE: 27
+
+=== DEMOGRAPHICS & BASELINE ===
+Date of birth: 14-Jun-1982
+Sex: Male
+Blood type: O positive
+Height: 176 cm
+Weight: 72 kg
+BMI: 23.2 kg/m²
+Allergy: Penicillin — pruritic rash as a child; no respiratory involvement or anaphylaxis.
+Smoking: Never smoker.
+Alcohol: Occasional, 1–2 drinks/month.
+Occupation: Software engineer.
+Living situation: Lives with spouse.
+
+=== FAMILY HISTORY ===
+Father: Hypertension diagnosed in his 50s.
+Mother: Type 2 diabetes diagnosed in her 60s.
+No known premature coronary artery disease in first-degree relatives.
+
+=== ANNUAL CLINICAL SUMMARY ===
+01-Mar-2010 — New-patient primary-care visit.
+Reason: Preventive examination and intermittent tension-type headaches after long workdays.
+Symptoms: Mild bilateral frontal headache 1–2 times/month, usually after prolonged computer use. No visual loss, weakness, syncope, fever, or vomiting.
+Vitals: BP 118/74, HR 68, RR 14, Temp 36.7 C.
+Exam: Normal cardiovascular, pulmonary, neurologic and abdominal examinations.
+Assessment: Episodic tension-type headache; otherwise healthy adult.
+Plan: Hydration, sleep regularity, ergonomic changes, stretching, acetaminophen as needed.
+
+Labs:
+- Hemoglobin 15.2 g/dL
+- WBC 6.4 K/uL
+- Platelets 244 K/uL
+- Creatinine 0.9 mg/dL
+- eGFR >90 mL/min/1.73m²
+- AST 21 U/L
+- ALT 24 U/L
+- Fasting glucose 88 mg/dL
+- Total cholesterol 176 mg/dL
+- LDL-C 104 mg/dL
+- HDL-C 53 mg/dL
+- Triglycerides 94 mg/dL
+
+Medications: None chronically.
+
+=== RAG-RELEVANT FACTS ===
+Baseline kidney function normal. Baseline fasting glucose normal. No diagnosed hypertension, diabetes, dyslipidemia, or cardiovascular disease.

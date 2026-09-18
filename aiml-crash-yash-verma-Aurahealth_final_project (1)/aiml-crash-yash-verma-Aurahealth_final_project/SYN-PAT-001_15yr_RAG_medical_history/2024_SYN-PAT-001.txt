@@ -1,0 +1,53 @@
+PATIENT ID: SYN-PAT-001
+PATIENT NAME: Arjun Mehta
+DATA TYPE: SYNTHETIC / FICTIONAL — created for RAG development and testing
+YEAR: 2024
+AGE: 41
+
+=== CLINICAL EVENTS ===
+12-Feb-2024 — Comprehensive annual review.
+Weight: 91 kg; BMI 29.4.
+BP: 120/74.
+Patient reports improved exercise, approximately 150–180 minutes/week, and reduced sugary drinks.
+
+Labs:
+- HbA1c 6.1%
+- Fasting glucose 112 mg/dL
+- LDL-C 71 mg/dL
+- HDL-C 45 mg/dL
+- TG 122 mg/dL
+- Creatinine 1.2 mg/dL
+- eGFR 78
+- Urine ACR 12 mg/g
+- Potassium 4.6 mmol/L
+- ALT 25 U/L
+- AST 22 U/L
+
+Assessment:
+1. Type 2 diabetes — controlled on metformin.
+2. Essential hypertension — controlled on combination therapy.
+3. Dyslipidemia — well controlled on rosuvastatin.
+4. Persistent but stable reduction in eGFR without significant albuminuria; ongoing monitoring planned.
+5. Overweight, improved from obesity-range BMI.
+
+Medication list unchanged:
+Metformin XR 1500 mg daily.
+Losartan 50 mg daily.
+Amlodipine 5 mg daily.
+Rosuvastatin 10 mg nightly.
+
+28-Aug-2024 — Follow-up.
+BP 118/72.
+HbA1c 6.0%.
+No hypoglycemia, chest pain, dyspnea, edema, neuropathy, or visual symptoms.
+
+=== LONGITUDINAL SUMMARY ===
+2010–2014: Generally healthy, with progressive weight and lipid increase.
+2015–2018: Prediabetes and borderline hypertension became persistent; antihypertensive and later statin therapy initiated.
+2019: Type 2 diabetes diagnosed; metformin started.
+2020–2021: Diabetes remained reasonably controlled; gradual eGFR decline documented.
+2022: Losartan added; renal function monitored more closely.
+2023–2024: Diabetes, blood pressure, and lipids controlled; renal function stable in eGFR mid/high 70s with low-grade albuminuria.
+
+IMPORTANT DATA INTEGRITY NOTE:
+This entire patient record is fictional and intentionally constructed for RAG/chatbot testing. It is NOT a real person's medical record and must not be used for clinical decision-making.

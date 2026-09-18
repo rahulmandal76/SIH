@@ -1,0 +1,291 @@
+[
+  {
+    "question_number": 1,
+    "question": "When was hypertension first treated?",
+    "strategy": "LONGITUDINAL_TREND",
+    "years_covered": [
+      2010,
+      2011,
+      2015,
+      2016,
+      2020,
+      2021,
+      2022,
+      2024
+    ],
+    "top_sources": [
+      "2010_SYN-PAT-001.txt",
+      "2011_SYN-PAT-001.txt",
+      "2015_SYN-PAT-001.txt",
+      "2016_SYN-PAT-001.txt",
+      "2020_SYN-PAT-001.txt",
+      "2021_SYN-PAT-001.txt",
+      "2022_SYN-PAT-001.txt",
+      "2024_SYN-PAT-001.txt",
+      "README_RAG_DATASET.txt"
+    ],
+    "confidence": "Medium",
+    "latency_seconds": 1.05,
+    "answer": "**Hypertension treatment initiation**\n\n- **First antihypertensive medication started:** **2016**  \n  - *Evidence:* The 2016 record (2016_SYN-PAT-001.txt) states that **amlodipine 5 mg daily** was initiated in 2016 as the first chronic antihypertensive therapy.  \n  - Prior to 2016, the 2015 record notes borderline‑high blood pressure but no medication was prescribed.\n\nThus, hypertension was first treated in **2016** with the initiation of amlodipine."
+  },
+  {
+    "question_number": 2,
+    "question": "When was type 2 diabetes first documented?",
+    "strategy": "LONGITUDINAL_TREND",
+    "years_covered": [
+      2013,
+      2014,
+      2015,
+      2018,
+      2019,
+      2020,
+      2021,
+      2022,
+      2024
+    ],
+    "top_sources": [
+      "2013_SYN-PAT-001.txt",
+      "2014_SYN-PAT-001.txt",
+      "2015_SYN-PAT-001.txt",
+      "2018_SYN-PAT-001.txt",
+      "2019_SYN-PAT-001.txt",
+      "2020_SYN-PAT-001.txt",
+      "2021_SYN-PAT-001.txt",
+      "2022_SYN-PAT-001.txt",
+      "2024_SYN-PAT-001.txt",
+      "README_RAG_DATASET.txt"
+    ],
+    "confidence": "High",
+    "latency_seconds": 1.13,
+    "answer": "**Type 2 diabetes was first documented in 2019.**\n\n- **2019 (2019_SYN-PAT-001.txt)** – The record notes the transition from prediabetes to a formal diagnosis of type 2 diabetes mellitus.  \n  - *20‑Feb‑2019*: “Assessment: Findings meet criteria for type 2 diabetes mellitus in this synthetic longitudinal scenario.”  \n  - *17‑Jun‑2019*: “Repeat HbA1c 6.5% after metformin initiation.”  \n\nPrior to 2019, the patient was noted to have prediabetes (e.g., 2018 HbA1c 6.3%) but no formal diabetes diagnosis. Thus, the earliest documented diagnosis of type 2 diabetes in the synthetic record is **2019**."
+  },
+  {
+    "question_number": 3,
+    "question": "Which medication was started in 2018?",
+    "strategy": "LONGITUDINAL_TREND",
+    "years_covered": [
+      2010,
+      2016,
+      2017,
+      2018,
+      2019,
+      2020,
+      2021,
+      2022,
+      2023,
+      2024
+    ],
+    "top_sources": [
+      "2010_SYN-PAT-001.txt",
+      "2016_SYN-PAT-001.txt",
+      "2017_SYN-PAT-001.txt",
+      "2018_SYN-PAT-001.txt",
+      "2019_SYN-PAT-001.txt",
+      "2020_SYN-PAT-001.txt",
+      "2021_SYN-PAT-001.txt",
+      "2022_SYN-PAT-001.txt",
+      "2023_SYN-PAT-001.txt",
+      "2024_SYN-PAT-001.txt"
+    ],
+    "confidence": "Medium",
+    "latency_seconds": 1.02,
+    "answer": "**Medication initiated in 2018**\n\n- **Rosuvastatin 10 mg nightly** was started in 2018 (see the 2018 record: “Medication change: Rosuvastatin 10 mg nightly started after shared decision‑making for persistent LDL elevation and increasing metabolic risk.”)"
+  },
+  {
+    "question_number": 4,
+    "question": "Which medication was added in 2022?",
+    "strategy": "SPECIFIC_YEAR",
+    "years_covered": [
+      2010,
+      2018,
+      2020,
+      2022,
+      2024
+    ],
+    "top_sources": [
+      "2010_SYN-PAT-001.txt",
+      "2018_SYN-PAT-001.txt",
+      "2020_SYN-PAT-001.txt",
+      "2022_SYN-PAT-001.txt",
+      "2024_SYN-PAT-001.txt",
+      "README_RAG_DATASET.txt"
+    ],
+    "confidence": "Medium",
+    "latency_seconds": 10.8,
+    "answer": "**Medication added in 2022**\n\n- **Losartan 50 mg daily** was added to the patient’s regimen in 2022 for blood pressure control and renal risk management.  \n  - *Evidence:* 2022 record (2022_SYN-PAT-001.txt) states: “Losartan 50 mg daily added for blood pressure control and renal risk management.”"
+  },
+  {
+    "question_number": 5,
+    "question": "What was the patient's HbA1c in 2015, 2019, and 2024?",
+    "strategy": "LONGITUDINAL_TREND",
+    "years_covered": [
+      2012,
+      2014,
+      2015,
+      2018,
+      2019,
+      2020,
+      2021,
+      2022,
+      2023,
+      2024
+    ],
+    "top_sources": [
+      "2012_SYN-PAT-001.txt",
+      "2014_SYN-PAT-001.txt",
+      "2015_SYN-PAT-001.txt",
+      "2018_SYN-PAT-001.txt",
+      "2019_SYN-PAT-001.txt",
+      "2020_SYN-PAT-001.txt",
+      "2021_SYN-PAT-001.txt",
+      "2022_SYN-PAT-001.txt",
+      "2023_SYN-PAT-001.txt",
+      "2024_SYN-PAT-001.txt",
+      "README_RAG_DATASET.txt"
+    ],
+    "confidence": "High",
+    "latency_seconds": 22.47,
+    "answer": "**HbA1c values for the requested years**\n\n| Year | HbA1c | Source |\n|------|-------|--------|\n| **2015** | **5.7 %** | 2015 annual examination (18‑May‑2015) |\n| **2019** | **6.2 %** | 2019 follow‑up (02‑Dec‑2019) |\n| **2024** | **6.1 %** | 2024 comprehensive annual review (12‑Feb‑2024) |\n\nThese values are taken directly from the laboratory results recorded in the respective annual clinical summaries."
+  },
+  {
+    "question_number": 6,
+    "question": "How did eGFR change across the available history?",
+    "strategy": "LONGITUDINAL_TREND",
+    "years_covered": [
+      2010,
+      2018,
+      2020,
+      2021,
+      2022,
+      2023,
+      2024
+    ],
+    "top_sources": [
+      "2010_SYN-PAT-001.txt",
+      "2018_SYN-PAT-001.txt",
+      "2020_SYN-PAT-001.txt",
+      "2021_SYN-PAT-001.txt",
+      "2022_SYN-PAT-001.txt",
+      "2023_SYN-PAT-001.txt",
+      "2024_SYN-PAT-001.txt",
+      "README_RAG_DATASET.txt"
+    ],
+    "confidence": "Medium",
+    "latency_seconds": 19.47,
+    "answer": "**eGFR Trend for SYN‑PAT‑001 (Arjun Mehta)**  \n\n| Year | Documented eGFR (mL/min/1.73 m²) | Source |\n|------|----------------------------------|--------|\n| **2010** | > 90 | 2010 record |\n| **2018** | 89 | 2018 record |\n| **2020** | 83 | 2020 record |\n| **2021** | 77 | 2021 record |\n| **2022** | 76 | 2022 record |\n| **2023** | 77 | 2023 record |\n| **2024** | mid‑to‑high 70s (stable) | 2024 record |\n\n### Chronological Narrative\n\n- **Baseline (2010)** – eGFR was > 90 mL/min/1.73 m², indicating normal kidney function.  \n- **Early Decline (2018)** – eGFR fell to 89 mL/min/1.73 m², a modest drop from baseline but still within normal limits.  \n- **Progressive Decline (2020–2021)** – eGFR decreased to 83 mL/min/1.73 m² in 2020 and further to 77 mL/min/1.73 m² in 2021, reflecting a gradual loss of renal filtration capacity.  \n- **Plateau and Slight Improvement (2022–2023)** – eGFR stabilized at 76 mL/min/1.73 m² in 2022 and slightly rose to 77 mL/min/1.73 m² in 2023, suggesting a plateau in the decline.  \n- **Current Status (2024)** – eGFR remains in the mid‑to‑high 70s, described as “stable” in the 2024 record, indicating no further significant deterioration over the most recent year.\n\n### Key Points\n\n- The eGFR trajectory shows a **steady decline** from > 90 mL/min/1.73 m² in 2010 to the mid‑70s by 2024.  \n- The most pronounced drop occurred between 2018 and 2021, after which the rate of decline slowed and the values have remained relatively stable.  \n- No acute episodes of kidney injury or sudden eGFR changes are documented; the trend is gradual and consistent across the available records."
+  },
+  {
+    "question_number": 7,
+    "question": "What medications were documented in 2024?",
+    "strategy": "SPECIFIC_YEAR",
+    "years_covered": [
+      2011,
+      2022,
+      2024
+    ],
+    "top_sources": [
+      "2011_SYN-PAT-001.txt",
+      "2022_SYN-PAT-001.txt",
+      "2024_SYN-PAT-001.txt",
+      "README_RAG_DATASET.txt"
+    ],
+    "confidence": "Medium",
+    "latency_seconds": 25.32,
+    "answer": "**Medications documented for Arjun Mehta in 2024**\n\n| Medication | Dose & Frequency | Source |\n|------------|------------------|--------|\n| Metformin XR | 1500 mg daily | 2024_SYN‑PAT‑001.txt (2024) |\n| Losartan | 50 mg daily | 2024_SYN‑PAT‑001.txt (2024) |\n| Amlodipine | 5 mg daily | 2024_SYN‑PAT‑001.txt (2024) |\n| Rosuvastatin | 10 mg nightly | 2024_SYN‑PAT‑001.txt (2024) |\n\nThe 2024 records explicitly state that the medication list was **unchanged** from prior years, confirming these four agents as the current pharmacologic regimen."
+  },
+  {
+    "question_number": 8,
+    "question": "What were the major metabolic changes between 2010 and 2024?",
+    "strategy": "LONGITUDINAL_TREND",
+    "years_covered": [
+      2010,
+      2011,
+      2012,
+      2013,
+      2014,
+      2018,
+      2019,
+      2020,
+      2021,
+      2024
+    ],
+    "top_sources": [
+      "2010_SYN-PAT-001.txt",
+      "2011_SYN-PAT-001.txt",
+      "2012_SYN-PAT-001.txt",
+      "2013_SYN-PAT-001.txt",
+      "2014_SYN-PAT-001.txt",
+      "2018_SYN-PAT-001.txt",
+      "2019_SYN-PAT-001.txt",
+      "2020_SYN-PAT-001.txt",
+      "2021_SYN-PAT-001.txt",
+      "2024_SYN-PAT-001.txt",
+      "README_RAG_DATASET.txt"
+    ],
+    "confidence": "Medium",
+    "latency_seconds": 7.76,
+    "answer": "**Major Metabolic Changes in Arjun Mehta (SYN‑PAT‑001) – 2010 → 2024**\n\n| Year | Key Metabolic Findings | Clinical Actions / Outcomes |\n|------|------------------------|-----------------------------|\n| **2010** | • Fasting glucose 88 mg/dL (normal)  <br>• LDL‑C 104 mg/dL, HDL‑C 53 mg/dL, TG 94 mg/dL (all within normal limits)  <br>• eGFR > 90 mL/min/1.73 m² (normal kidney function) | Baseline healthy metabolic profile; no chronic medications. |\n| **2011–2014** | • Gradual rise in weight/BMI and LDL‑C; triglycerides and fasting glucose began to climb but remained in the normal range"
+  },
+  {
+    "question_number": 9,
+    "question": "Did the patient have documented diabetic retinopathy?",
+    "strategy": "STANDARD_SEMANTIC",
+    "years_covered": [
+      2010,
+      2014,
+      2019,
+      2021,
+      2023
+    ],
+    "top_sources": [
+      "2010_SYN-PAT-001.txt",
+      "2014_SYN-PAT-001.txt",
+      "2019_SYN-PAT-001.txt",
+      "2021_SYN-PAT-001.txt",
+      "2023_SYN-PAT-001.txt",
+      "README_RAG_DATASET.txt"
+    ],
+    "confidence": "High",
+    "latency_seconds": 10.04,
+    "answer": "**Answer**\n\nNo, the synthetic patient record does not contain any documentation of diabetic retinopathy.\n\n- **2023 record**: The eye screening performed on 09‑Mar‑2023 explicitly states “no diabetic retinopathy reported.”  \n- No other annual records (2010, 2014, 2019, 2021) mention an eye exam or diabetic retinopathy findings.\n\nThus, based on the available evidence, diabetic retinopathy has not been documented for this patient."
+  },
+  {
+    "question_number": 10,
+    "question": "Give a chronological summary of the patient's major medical events.",
+    "strategy": "TIMELINE_SUMMARY",
+    "years_covered": [
+      2010,
+      2011,
+      2012,
+      2013,
+      2014,
+      2015,
+      2016,
+      2017,
+      2018,
+      2019,
+      2022,
+      2023,
+      2024
+    ],
+    "top_sources": [
+      "2010_SYN-PAT-001.txt",
+      "2011_SYN-PAT-001.txt",
+      "2012_SYN-PAT-001.txt",
+      "2013_SYN-PAT-001.txt",
+      "2014_SYN-PAT-001.txt",
+      "2015_SYN-PAT-001.txt",
+      "2016_SYN-PAT-001.txt",
+      "2017_SYN-PAT-001.txt",
+      "2018_SYN-PAT-001.txt",
+      "2019_SYN-PAT-001.txt",
+      "2022_SYN-PAT-001.txt",
+      "2023_SYN-PAT-001.txt",
+      "2024_SYN-PAT-001.txt",
+      "README_RAG_DATASET.txt"
+    ],
+    "confidence": "Medium",
+    "latency_seconds": 42.01,
+    "answer": "## Chronological Summary of Major Medical Events  \n*(All information is taken directly from the provided yearly records for SYN‑PAT‑001, Arjun Mehta)*\n\n| Year | Key Clinical Events & Findings | Medications & Interventions |\n|------|--------------------------------|-----------------------------|\n| **2010** | • Baseline healthy adult (BMI 23.2 kg/m²).<br>• Normal fasting glucose (88 mg/dL), eGFR > 90 mL/min/1.73 m².<br>• No chronic disease. | None chronically prescribed. |\n| **2011** | • First documented allergy treatment (cetirizine for seasonal allergic rhinitis).<br>• Metabolic markers remained normal; kidney function unchanged. | Cetirizine 10 mg PRN. |\n| **2012** | • Rising BMI (24.5 kg/m²) and lipids (LDL 116 mg/dL, TG 115 mg/dL).<br>• Fasting glucose 93 mg/dL, HbA1c 5.2 %. | Lifestyle counseling; no medications. |\n| **2013** | • BMI 25.5 kg/m²; lipids continued to rise (LDL 121 mg/dL, TG 128 mg/dL).<br>• Fasting glucose 96 mg/dL, HbA1c 5.3 %. | None. |\n| **2014** | • BMI 26.5 kg/m²; fasting glucose 99 mg/dL, HbA1c 5.5 %.<br>• Lipids: LDL 128 mg/dL, TG 145 mg/dL. | Lifestyle counseling; no medications. |\n| **2015** | • BMI 27.8 kg/m²; fasting glucose 103 mg/dL, HbA1c 5.7 % (prediabetes).<br>• BP 132/84 mmHg (borderline hypertension). | No pharmacologic therapy yet. |\n| **2016** | • BP 138/88 mmHg (confirmed early essential hypertension).<br>• Fasting glucose 106 mg/dL, HbA1c 5.8 %. | **Amlodipine 5 mg daily** started. |\n| **2017** | • BP 128/80 mmHg (controlled on amlodipine).<br>• HbA1c 6.0 % (prediabetes worsening).<br>• Lipids: LDL 145 mg/dL, TG 184 mg/dL. | Continued amlodipine; lifestyle counseling. |\n| **2018** | • BMI 29.7 kg/m²; HbA1c"
+  }
+]

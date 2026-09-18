@@ -1,0 +1,40 @@
+PATIENT ID: SYN-PAT-001
+PATIENT NAME: Arjun Mehta
+DATA TYPE: SYNTHETIC / FICTIONAL — created for RAG development and testing
+YEAR: 2023
+AGE: 40
+
+=== CLINICAL EVENTS ===
+09-Mar-2023 — Diabetes, renal, and cardiovascular risk review.
+Weight 94 kg; BMI 30.3.
+BP 122/76.
+Medications:
+- Metformin XR 1500 mg daily
+- Losartan 50 mg daily
+- Amlodipine 5 mg daily
+- Rosuvastatin 10 mg nightly
+
+Labs:
+- HbA1c 6.3%
+- LDL-C 75 mg/dL
+- HDL-C 43 mg/dL
+- TG 138 mg/dL
+- Creatinine 1.2 mg/dL
+- eGFR 77
+- Urine ACR 14 mg/g
+- ALT 28 U/L
+
+Preventive care:
+- Foot exam: normal sensation, no ulcers.
+- Eye screening: no diabetic retinopathy reported.
+- Vaccination review completed.
+- Lifestyle counseling continued.
+
+16-Sep-2023 — Episode of intermittent palpitations lasting several minutes.
+ECG in clinic: normal sinus rhythm.
+No syncope, chest pain, or exertional symptoms.
+Basic metabolic panel normal.
+Symptoms resolved; advised monitoring.
+
+=== RAG-RELEVANT FACTS ===
+Diabetes and hypertension remained controlled. Kidney function stable in the mid-to-high 70s eGFR range. Palpitations occurred without documented arrhythmia.

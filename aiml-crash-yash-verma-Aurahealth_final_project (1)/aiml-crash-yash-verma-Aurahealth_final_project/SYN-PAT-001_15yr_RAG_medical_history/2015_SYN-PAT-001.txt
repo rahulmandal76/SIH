@@ -1,0 +1,36 @@
+PATIENT ID: SYN-PAT-001
+PATIENT NAME: Arjun Mehta
+DATA TYPE: SYNTHETIC / FICTIONAL — created for RAG development and testing
+YEAR: 2015
+AGE: 32
+
+=== CLINICAL EVENTS ===
+18-May-2015 — Annual examination.
+Weight 86 kg; BMI 27.8.
+BP 132/84 on repeated measurement.
+Patient denies chest pain, palpitations, exertional dyspnea, edema, or neurologic symptoms.
+
+Labs:
+- Fasting glucose 103 mg/dL
+- HbA1c 5.7%
+- LDL-C 134 mg/dL
+- HDL-C 44 mg/dL
+- TG 162 mg/dL
+- Creatinine 1.0 mg/dL
+- eGFR 92
+- Urine albumin negative
+
+Assessment:
+1. Prediabetes-range HbA1c.
+2. Borderline elevated blood pressure.
+3. Mixed dyslipidemia.
+4. Overweight.
+
+Plan: Intensive lifestyle modification. Home BP log requested. No antihypertensive or glucose-lowering medication started.
+
+26-Oct-2015 — Follow-up.
+Average home BP approximately 130–134/82–86. Lifestyle adherence partial. Weight 85 kg.
+Plan: Continue lifestyle therapy and recheck in 6 months.
+
+=== RAG-RELEVANT FACTS ===
+2015 marks first HbA1c in the prediabetes range and repeated borderline-high blood pressure.

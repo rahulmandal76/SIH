@@ -1,0 +1,33 @@
+PATIENT ID: SYN-PAT-001
+PATIENT NAME: Arjun Mehta
+DATA TYPE: SYNTHETIC / FICTIONAL — created for RAG development and testing
+YEAR: 2020
+AGE: 37
+
+=== CLINICAL EVENTS ===
+COVID-era telehealth follow-ups used for chronic disease management.
+
+14-Apr-2020 — Telehealth.
+Weight 97 kg by home scale.
+Home BP average 128–132/80–84.
+Medications: Metformin XR 1000 mg nightly; amlodipine 5 mg daily; rosuvastatin 10 mg nightly.
+No chest pain or dyspnea.
+
+01-Aug-2020 — Laboratory review:
+- HbA1c 6.4%
+- Fasting glucose 119 mg/dL
+- LDL-C 82 mg/dL
+- HDL-C 44 mg/dL
+- TG 156 mg/dL
+- Creatinine 1.1 mg/dL
+- eGFR 83
+- ALT 30 U/L
+- Urine ACR 12 mg/g
+
+Assessment:
+Diabetes controlled near individualized target; hypertension controlled; dyslipidemia improved.
+
+Lifestyle note: Reduced activity during lockdown and gradual weight gain. Counseling focused on home exercise and diet.
+
+=== RAG-RELEVANT FACTS ===
+Chronic medications stable through 2020. Glycemic control remained moderate and stable. No diabetes-related complications documented.

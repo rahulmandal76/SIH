@@ -1,0 +1,44 @@
+PATIENT ID: SYN-PAT-001
+PATIENT NAME: Arjun Mehta
+DATA TYPE: SYNTHETIC / FICTIONAL — created for RAG development and testing
+YEAR: 2022
+AGE: 39
+
+=== CLINICAL EVENTS ===
+08-Feb-2022 — Chronic disease evaluation.
+Weight 97 kg; BMI 31.3.
+BP 136/84 despite adherence to amlodipine.
+No edema, orthopnea, or exertional chest pain.
+
+Labs:
+- HbA1c 6.8%
+- Fasting glucose 130 mg/dL
+- LDL-C 78 mg/dL
+- HDL-C 41 mg/dL
+- TG 149 mg/dL
+- Creatinine 1.3 mg/dL
+- eGFR 69
+- Urine ACR 22 mg/g
+- Potassium 4.5 mmol/L
+
+Assessment:
+- Type 2 diabetes, modestly above target.
+- Hypertension, not optimally controlled.
+- Dyslipidemia controlled on statin.
+- Chronic kidney function decline; possible early CKD to be monitored, with no established nephrotic-range protein loss.
+
+Medication changes:
+Losartan 50 mg daily added for blood pressure control and renal risk management.
+Amlodipine 5 mg continued.
+Metformin XR 1500 mg daily continued.
+Rosuvastatin 10 mg nightly continued.
+
+20-Nov-2022 — Follow-up.
+BP 124/78.
+Creatinine 1.2 mg/dL; eGFR 76.
+Urine ACR 18 mg/g.
+HbA1c 6.6%.
+No medication intolerance.
+
+=== RAG-RELEVANT FACTS ===
+Losartan added in 2022. Renal function showed partial improvement after the spring deterioration. No documented retinopathy, neuropathy, or macrovascular event.

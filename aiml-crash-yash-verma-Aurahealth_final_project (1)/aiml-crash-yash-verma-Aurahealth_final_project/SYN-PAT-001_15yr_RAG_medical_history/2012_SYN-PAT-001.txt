@@ -1,0 +1,31 @@
+PATIENT ID: SYN-PAT-001
+PATIENT NAME: Arjun Mehta
+DATA TYPE: SYNTHETIC / FICTIONAL — created for RAG development and testing
+YEAR: 2012
+AGE: 29
+
+=== ANNUAL CLINICAL SUMMARY ===
+22-Mar-2012 — Preventive visit.
+Weight: 76 kg; BMI 24.5.
+BP: 122/78.
+Patient reported decreased exercise because of work demands.
+No cardiopulmonary symptoms.
+
+Laboratory trend:
+- Fasting glucose 93 mg/dL
+- HbA1c 5.2%
+- Total cholesterol 188 mg/dL
+- LDL-C 116 mg/dL
+- HDL-C 49 mg/dL
+- Triglycerides 115 mg/dL
+- Creatinine 0.9 mg/dL
+- eGFR >90
+
+Assessment:
+1. Borderline upward lipid trend without indication for drug therapy.
+2. Reduced physical activity.
+
+Plan: Increase aerobic activity to at least 150 minutes/week, improve dietary fiber intake, repeat lipid panel in 12 months.
+
+=== RAG-RELEVANT FACTS ===
+First documentation of mildly elevated LDL compared with baseline. No statin started. No diabetes or hypertension.

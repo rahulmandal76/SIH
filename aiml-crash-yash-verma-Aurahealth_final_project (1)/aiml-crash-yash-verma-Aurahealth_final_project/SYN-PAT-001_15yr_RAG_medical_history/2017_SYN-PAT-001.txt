@@ -1,0 +1,33 @@
+PATIENT ID: SYN-PAT-001
+PATIENT NAME: Arjun Mehta
+DATA TYPE: SYNTHETIC / FICTIONAL — created for RAG development and testing
+YEAR: 2017
+AGE: 34
+
+=== CLINICAL EVENTS ===
+19-Apr-2017 — Annual chronic disease review.
+Medications: Amlodipine 5 mg daily.
+Weight 89 kg; BMI 28.7.
+BP 128/80.
+
+Labs:
+- HbA1c 6.0%
+- Fasting glucose 111 mg/dL
+- LDL-C 145 mg/dL
+- HDL-C 41 mg/dL
+- TG 184 mg/dL
+- Creatinine 1.0 mg/dL
+- eGFR 90
+- Urine albumin/creatinine ratio 7 mg/g
+
+Assessment:
+1. Essential hypertension, controlled.
+2. Prediabetes, worsening trend.
+3. Mixed hyperlipidemia.
+
+Plan: Continue amlodipine. Increase exercise. Nutrition counseling emphasized. Discussed possible statin if lipid trend persists.
+
+12-Nov-2017 — Acute gastroenteritis lasting 2 days. Managed outpatient with oral hydration and temporary dietary modification. No dehydration or admission.
+
+=== RAG-RELEVANT FACTS ===
+Hypertension controlled with amlodipine. Prediabetes progressed but diabetes not yet diagnosed. No albuminuria.

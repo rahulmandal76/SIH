@@ -1,0 +1,28 @@
+PATIENT ID: SYN-PAT-001
+PATIENT NAME: Arjun Mehta
+DATA TYPE: SYNTHETIC / FICTIONAL — created for RAG development and testing
+YEAR: 2011
+AGE: 28
+
+=== ANNUAL CLINICAL SUMMARY ===
+15-Feb-2011 — Annual physical.
+Vitals: BP 120/76, HR 70, weight 74 kg, BMI 23.9.
+New issue: Seasonal allergic rhinitis with nasal congestion and sneezing during spring.
+Exam: Pale nasal mucosa; lungs clear.
+Assessment: Seasonal allergic rhinitis.
+Treatment: Cetirizine 10 mg orally as needed; saline nasal irrigation.
+
+Laboratory monitoring:
+- Fasting glucose 90 mg/dL
+- Creatinine 0.9 mg/dL
+- eGFR >90
+- LDL-C 108 mg/dL
+- HDL-C 51 mg/dL
+- TG 102 mg/dL
+- HbA1c 5.1%
+
+No hospitalizations, surgeries, or emergency visits.
+No chronic prescription medications.
+
+=== RAG-RELEVANT FACTS ===
+Allergy treatment started in 2011. Metabolic markers remained normal. Kidney function remained normal.
