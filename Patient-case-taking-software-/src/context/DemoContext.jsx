@@ -38,6 +38,14 @@ export const DemoProvider = ({ children }) => {
     return mockSampleDocuments[0];
   });
 
+  // Phase 3.1: Kiosk session token for patient-scope AI authorization.
+  // Created by POST /api/intake and bound to a specific patientUid.
+  // Required as X-Kiosk-Session header on patient-scoped AI requests.
+  // Phase 4 will replace this with a JWT bearing User.id + role.
+  const [kioskSessionToken, setKioskSessionToken] = useState(() => {
+    return localStorage.getItem("medikiosk_kiosk_token") || null;
+  });
+
   // Switch Role
   const switchRole = (newRole) => {
     setUserRole(newRole);
@@ -243,11 +251,17 @@ export const DemoProvider = ({ children }) => {
 
     // 2. Persist to Express Server backend
     try {
-      await fetch("/api/intake", {
+      const resp = await fetch("/api/intake", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(patient)
       });
+      const data = await resp.json().catch(() => ({}));
+      // Capture the kiosk session token for patient-scoped AI authorization (Phase 3.1)
+      if (data.kioskSessionToken) {
+        setKioskSessionToken(data.kioskSessionToken);
+        localStorage.setItem("medikiosk_kiosk_token", data.kioskSessionToken);
+      }
       console.log("[Client] Case saved to server successfully!");
     } catch (err) {
       console.warn("[Client] Saved locally, server sync error:", err.message);
@@ -277,11 +291,17 @@ export const DemoProvider = ({ children }) => {
 
     // 2. Persist to Express Server backend
     try {
-      await fetch("/api/intake", {
+      const resp = await fetch("/api/intake", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(patient)
       });
+      const data = await resp.json().catch(() => ({}));
+      // Capture the kiosk session token for patient-scoped AI authorization (Phase 3.1)
+      if (data.kioskSessionToken) {
+        setKioskSessionToken(data.kioskSessionToken);
+        localStorage.setItem("medikiosk_kiosk_token", data.kioskSessionToken);
+      }
       console.log("[Client] Case saved to server successfully!");
     } catch (err) {
       console.warn("[Client] Saved locally, server sync error:", err.message);
@@ -318,7 +338,9 @@ export const DemoProvider = ({ children }) => {
         sendCaseOnlyToDoctor,
         latestToken,
         activeScannedDoc,
-        setActiveScannedDoc
+        setActiveScannedDoc,
+        kioskSessionToken,
+        setKioskSessionToken
       }}
     >
       {children}

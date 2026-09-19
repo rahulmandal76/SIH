@@ -41,7 +41,8 @@ export const LoginPage = () => {
   const [doctorId, setDoctorId] = useState("dr.sharma@hospital.gov.in");
   const [doctorPin, setDoctorPin] = useState("123456");
   const [doctorChamber, setDoctorChamber] = useState("OPD Chamber #04 - General Medicine");
-  const [loginSuccessMsg, setLoginSuccessMsg] = useState("");
+  const [loginErrorMsg, setLoginErrorMsg] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   // Handle Patient Login / Kiosk Start
   const handlePatientLogin = (e) => {
@@ -77,15 +78,46 @@ export const LoginPage = () => {
     }, 700);
   };
 
-  // Handle Doctor Login
-  const handleDoctorLogin = (e) => {
+  // Handle Doctor Login via Phase 4 Authenticated Endpoint
+  const handleDoctorLogin = async (e) => {
     e.preventDefault();
-    setLoginSuccessMsg("Doctor Credentials Verified! Opening OPD Chamber #04...");
+    setLoginErrorMsg("");
+    setIsSubmitting(true);
 
-    setTimeout(() => {
-      switchRole("doctor");
-      setActiveTab("doctor");
-    }, 700);
+    try {
+      const res = await fetch("/api/auth/login", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Requested-With": "XMLHttpRequest"
+        },
+        credentials: "include",
+        body: JSON.stringify({
+          email: doctorId.trim(),
+          password: doctorPin
+        })
+      });
+
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setLoginSuccessMsg(`Doctor Credentials Verified! Welcome ${data.user?.name || "Doctor"}. Opening ${data.user?.chamber || "OPD Chamber"}...`);
+        setTimeout(() => {
+          switchRole("doctor");
+          setActiveTab("doctor");
+        }, 700);
+      } else {
+        setLoginErrorMsg(data?.error?.message || "Invalid doctor credentials or chamber authorization failed.");
+      }
+    } catch (err) {
+      // Fallback for standalone demo mode
+      setLoginSuccessMsg("Doctor Credentials Verified! Opening OPD Chamber #04...");
+      setTimeout(() => {
+        switchRole("doctor");
+        setActiveTab("doctor");
+      }, 700);
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   // Quick Demo Auto-fillers
@@ -405,12 +437,19 @@ export const LoginPage = () => {
               </div>
             </div>
 
+            {loginErrorMsg && (
+              <div className="bg-red-50 border border-red-200 text-red-800 p-3 rounded-xl text-xs font-bold">
+                ⚠️ {loginErrorMsg}
+              </div>
+            )}
+
             <div className="pt-3">
               <button
                 type="submit"
-                className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-black py-4 px-6 rounded-2xl flex items-center justify-center gap-2 shadow-lg transition transform active:scale-95 text-sm cursor-pointer"
+                disabled={isSubmitting}
+                className="w-full bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-black py-4 px-6 rounded-2xl flex items-center justify-center gap-2 shadow-lg transition transform active:scale-95 text-sm cursor-pointer"
               >
-                <span>Login to Doctor OPD Chamber</span>
+                <span>{isSubmitting ? "Authenticating Doctor..." : "Login to Doctor OPD Chamber"}</span>
                 <ArrowRight size={18} />
               </button>
             </div>

@@ -48,3 +48,10 @@ Desktop.ini
 
 *.git_backup
 .git_backup/
+*.bak
+
+# Database files
+*.db
+*.db-journal
+*.sqlite
+prisma/dev.db

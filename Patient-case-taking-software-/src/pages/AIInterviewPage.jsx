@@ -15,27 +15,10 @@ import {
   CheckCircle2,
   AlertCircle
 } from "lucide-react";
-import { GoogleGenerativeAI } from "@google/generative-ai";
+// NOTE (Phase 3): Direct browser Gemini import removed.
+// AI calls now route through the secure Node backend proxy: POST /api/ai/intake-question
+// The GEMINI_API_KEY secret exists only in the server-side .env and is never in the browser bundle.
 import { getAdaptiveClinicalResponse } from "../utils/clinicalDialogEngine";
-
-const genAI = new GoogleGenerativeAI(import.meta.env.VITE_GEMINI_API_KEY);
-
-const SYSTEM_PROMPT = `You are MedSync AI, an empathetic clinical history-taking assistant at an Indian hospital OPD kiosk.
-The patient is speaking to you in Hindi, Hinglish, or English.
-
-CRITICAL INSTRUCTIONS:
-1. Focus directly on the patient's EXACT symptom or statement. Your next question MUST be clinically relevant to what they just reported.
-   - If stomach/abdomen: ask exact location (upper/lower/navel), vomiting, loose motions, or relation to food.
-   - If cough/cold: ask if dry or phlegm (balgam), sore throat, fever, or breathlessness.
-   - If fever: ask high vs mild, chills/kapkapi, body ache, or duration.
-   - If chest pain: ask if radiating to left arm/back, pressure sensation, or sweating (RED FLAG).
-   - If headache/dizziness: ask which side, vomiting sensation, light sensitivity.
-   - If body/joint/back: ask exact joint, swelling, morning stiffness, or injury.
-2. If the patient asks a direct question or expresses worry (e.g. "kya ye serious hai?", "doctor kab aayenge?", "kaunsi dawa lu?"), give a 1-sentence warm reassurance first, then ask the clinical question.
-3. Keep question concise (under 28 words) in simple, conversational Hinglish.
-4. Always provide 4 quick-tap options at the end in this format:
-[Your concise clinical question]
-OPTIONS: opt1 | opt2 | opt3 | opt4`;
 
 const CLINICAL_STEPS = [
   "Chief Complaint",
@@ -55,7 +38,8 @@ export const AIInterviewPage = () => {
     redFlagTriggered,
     setRedFlagTriggered,
     saveInterviewAndGenerateSummary,
-    patientData
+    patientData,
+    kioskSessionToken
   } = useDemo();
 
   const [isListening, setIsListening] = useState(false);
@@ -96,58 +80,77 @@ export const AIInterviewPage = () => {
     return ["chest", "seene", "left arm", "baayein", "saans", "breathless", "behosh", "heart", "dil", "chakkar"].some(k => lower.includes(k));
   };
 
-  // Call Gemini with multi-model fallback or smart clinical engine
+  /**
+   * fetchAIResponse — Phase 3: calls the secure Node backend proxy.
+   * The backend holds the Gemini key; this function never touches it.
+   *
+   * On backend success  → returns { text, options, source: "gemini" }
+   * On backend failure  → falls back to clinicalDialogEngine (local, offline-safe)
+   * The two sources are clearly distinguished; the fallback is never labelled as Gemini.
+   */
   const fetchAIResponse = async (patientMessage, conversationHistory, stepIndex) => {
-    const candidateModels = ["gemini-flash-lite-latest", "gemini-flash-latest", "gemini-3.6-flash"];
+    // Build a clean, bounded conversation history for the backend
+    const cleanHistory = conversationHistory
+      .filter(msg => msg.text)
+      .map(msg => ({ sender: msg.sender, text: msg.text }));
 
-    const contents = [];
-    conversationHistory.forEach((msg) => {
-      if (msg.text) {
-        contents.push({
-          role: msg.sender === "patient" ? "user" : "model",
-          parts: [{ text: msg.text }]
-        });
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 8000); // 8s total frontend timeout
+
+      // Build request headers — include session token only if available
+      const headers = { "Content-Type": "application/json" };
+      if (kioskSessionToken) {
+        headers["X-Kiosk-Session"] = kioskSessionToken;
       }
-    });
-    contents.push({
-      role: "user",
-      parts: [{ text: patientMessage }]
-    });
 
-    for (const modelName of candidateModels) {
-      try {
-        const model = genAI.getGenerativeModel({
-          model: modelName,
-          systemInstruction: SYSTEM_PROMPT
-        });
+      const response = await fetch("/api/ai/intake-question", {
+        method:  "POST",
+        headers,
+        signal:  controller.signal,
+        body: JSON.stringify({
+          patientMessage,
+          conversationHistory: cleanHistory,
+          stepIndex,
+          language,
+          // Pass age/gender for clinical context only — NOT name, phone, or ABHA
+          patientAge:    patientData?.age    || undefined,
+          patientGender: patientData?.gender || undefined,
+          // Only send patientUid when we have a session token to authorize it.
+          // Without a session token, omit patientUid — request is anonymous intake
+          // and falls back correctly without triggering 401.
+          patientUid: kioskSessionToken ? (patientData?.patientUid || undefined) : undefined
+        })
+      });
 
-        const timeoutPromise = new Promise((_, reject) =>
-          setTimeout(() => reject(new Error("Gemini timeout")), 5500)
-        );
+      clearTimeout(timeout);
 
-        const responsePromise = model.generateContent({
-          contents: contents.slice(-8),
-          generationConfig: {
-            maxOutputTokens: 120,
-            temperature: 0.3
-          }
-        });
-
-        const result = await Promise.race([responsePromise, timeoutPromise]);
-        const replyText = result.response.text().trim();
-
-        if (replyText) {
-          const { cleanText, options } = parseOptions(replyText);
+      if (response.ok) {
+        const data = await response.json();
+        if (data.success && data.text) {
           return {
-            text: cleanText,
-            options: options.length > 0 ? options : ["हाँ, यह है", "नहीं, ऐसा नहीं", "कुछ समय से", "पता नहीं"]
+            text:    data.text,
+            options: data.options || ["हाँ, यह है", "नहीं, ऐसा नहीं", "कुछ समय से", "पता नहीं"],
+            source:  "gemini"
           };
         }
-      } catch (err) {
-        console.warn(`Model ${modelName} notice:`, err.message);
+      }
+
+      // Backend returned a non-OK status (rate limit, timeout, unavailable)
+      // Use honest offline fallback — do NOT label it as Gemini
+      const errData = await response.json().catch(() => ({}));
+      console.warn("[AIInterview] Backend AI unavailable:", errData?.error?.code || response.status);
+    } catch (err) {
+      // Network error or abort — use offline fallback
+      if (err.name === "AbortError") {
+        console.warn("[AIInterview] Backend AI request timed out; using offline clinical engine.");
+      } else {
+        console.warn("[AIInterview] Backend AI request failed; using offline clinical engine:", err.message);
       }
     }
 
+    // Honest offline fallback: clinicalDialogEngine.js
+    // This is local rule-based logic, NOT Gemini. Clearly distinguished.
     return getAdaptiveClinicalResponse(patientMessage, conversationHistory, stepIndex);
   };
 
@@ -240,7 +243,7 @@ export const AIInterviewPage = () => {
               <div className="flex items-center gap-2">
                 <h2 className="text-base font-black text-slate-900">Medical Chatbot (Clinical Intake)</h2>
                 <span className="bg-blue-50 text-blue-700 border border-blue-200 text-[10px] font-black px-2 py-0.5 rounded-full">
-                  Gemini Active
+                  AI Assisted
                 </span>
               </div>
               <p className="text-xs text-slate-500 font-medium">

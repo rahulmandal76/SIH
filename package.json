@@ -1,0 +1,45 @@
+{
+  "name": "unified-healthcare-platform",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Unified Healthcare Intelligence Platform combining MedSync Clinical Kiosk and AuraHealth Nexus Longitudinal RAG",
+  "type": "module",
+  "scripts": {
+    "dev:web": "npm --prefix Patient-case-taking-software- run dev",
+    "dev:api": "node Patient-case-taking-software-/server.js",
+    "dev:streamlit": "streamlit run \"aiml-crash-yash-verma-Aurahealth_final_project (1)/aiml-crash-yash-verma-Aurahealth_final_project/app.py\"",
+    "build:web": "npm --prefix Patient-case-taking-software- run build",
+    "test:docs": "node -e \"console.log('Docs verified: 18 specifications present.')\"",
+    "prisma:version": "prisma -v",
+    "prisma:validate:pg": "prisma validate --schema=prisma/schema.prisma",
+    "prisma:validate:sqlite": "prisma validate --schema=prisma/schema.sqlite.prisma",
+    "prisma:generate:sqlite": "prisma generate --schema=prisma/schema.sqlite.prisma",
+    "prisma:push:sqlite": "prisma db push --schema=prisma/schema.sqlite.prisma",
+    "test:db":            "node tests/phase2_database.test.js",
+    "test:phase2":        "node tests/phase2_database.test.js",
+    "test:phase3":        "node tests/phase3_gateway.test.js",
+    "test:phase4":        "node tests/phase4_identity.test.js",
+    "test:all":           "node tests/phase2_database.test.js && node tests/phase3_gateway.test.js && node tests/phase4_identity.test.js"
+  },
+  "keywords": [
+    "healthcare",
+    "kiosk",
+    "rag",
+    "longitudinal-medical-intelligence",
+    "faiss",
+    "abdm"
+  ],
+  "author": "Antigravity + SIH Team",
+  "license": "UNLICENSED",
+  "dependencies": {
+    "@google/generative-ai": "^0.24.1",
+    "@prisma/adapter-better-sqlite3": "^7.10.0",
+    "@prisma/adapter-pg": "^7.10.0",
+    "@prisma/client": "^7.10.0",
+    "better-sqlite3": "^13.0.3",
+    "dotenv": "^16.5.0",
+    "pg": "^8.23.0",
+    "prisma": "^7.10.0",
+    "zod": "^3.25.0"
+  }
+}

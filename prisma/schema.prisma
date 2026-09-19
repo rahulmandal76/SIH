@@ -1,0 +1,247 @@
+// Canonical Production PostgreSQL Schema
+// Unified Healthcare Intelligence Platform: MedSync + AuraHealth Nexus
+
+datasource db {
+  provider = "postgresql"
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model User {
+  id           Int      @id @default(autoincrement())
+  userUid      String   @unique
+  name         String
+  email        String   @unique
+  passwordHash String?  // Asynchronous scrypt hash (64 bytes hex)
+  salt         String?  // 16-byte random salt hex
+  role         String   // doctor, admin, clinical_staff, kiosk_operator
+  chamber      String?
+  active       Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  assignedEncounters        Encounter[]        @relation("AssignedDoctor")
+  careRelationshipsReceived CareRelationship[] @relation("CareRelationshipDoctor")
+  careRelationshipsAssigned CareRelationship[] @relation("CareRelationshipAssignedBy")
+  documentApprovals         DocumentApproval[]
+  auditLogs                 AuditLog[]         @relation("UserAuditLogs")
+  capturedConsents          PatientConsent[]
+}
+
+model Patient {
+  id           Int       @id @default(autoincrement())
+  patientUid   String    @unique // System immutable UUID v4
+  patientId    String    @unique // Human-readable reference e.g. PAT-2026-0001, SYN-PAT-001
+  fullName     String
+  dateOfBirth  DateTime?
+  age          Int?
+  gender       String?
+  mobileNumber String?   // Non-unique: shared family numbers supported
+  abhaNumber   String?
+  abhaAddress  String?
+  abhaStatus   String    @default("not_configured") // entered, lookup_pending, verified, verification_failed, not_configured, unavailable
+  abhaVerified Boolean   @default(false)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  encounters        Encounter[]
+  careRelationships CareRelationship[]
+  documents         Document[]
+  consents          PatientConsent[]
+  auditLogs         AuditLog[]
+
+  @@index([mobileNumber])
+  @@index([abhaNumber])
+}
+
+model Encounter {
+  id                 Int       @id @default(autoincrement())
+  encounterId        String    @unique
+  patientUid         String
+  assignedDoctorId   Int?      // Enforces current encounter clinical access boundary
+  tokenNumber        String
+  priority           String    @default("Normal")
+  triageReason       String?
+  consultationStatus String    @default("waiting") // waiting, in_progress, completed
+  chamber            String?   // Persisted chamber field
+  chiefComplaint     String?
+  hpi                String?
+  pastHistory        String?
+  currentMedsJson    String?
+  allergiesJson      String?
+  doctorNotes        String?
+  intakeConversation String?
+  provenance         String    @default("PATIENT_REPORTED")
+  createdAt          DateTime  @default(now())
+  completedAt        DateTime?
+
+  patient           Patient            @relation(fields: [patientUid], references: [patientUid], onDelete: Cascade)
+  assignedDoctor    User?              @relation("AssignedDoctor", fields: [assignedDoctorId], references: [id])
+  careRelationships CareRelationship[]
+  documents         Document[]
+
+  @@index([patientUid])
+  @@index([assignedDoctorId])
+  @@index([tokenNumber])
+  @@index([consultationStatus])
+}
+
+model CareRelationship {
+  id               Int       @id @default(autoincrement())
+  patientUid       String
+  doctorId         Int
+  relationshipType String    // ATTENDING_OPD, PRIMARY_PHYSICIAN, SPECIALIST_REFERRAL
+  status           String    @default("active") // active, suspended, ended
+  encounterId      String?
+  createdAt        DateTime  @default(now())
+  expiresAt        DateTime?
+  endedAt          DateTime?
+  assignedByUserId Int?
+  notes            String?
+
+  patient          Patient    @relation(fields: [patientUid], references: [patientUid], onDelete: Cascade)
+  doctor           User       @relation("CareRelationshipDoctor", fields: [doctorId], references: [id])
+  assignedByUser   User?      @relation("CareRelationshipAssignedBy", fields: [assignedByUserId], references: [id])
+  encounter        Encounter? @relation(fields: [encounterId], references: [encounterId])
+
+  @@index([patientUid, doctorId, status])
+  @@index([encounterId])
+}
+
+model Document {
+  id           Int       @id @default(autoincrement())
+  documentId   String    @unique
+  patientUid   String
+  encounterId  String?
+  fileName     String
+  filePath     String
+  fileSize     Int
+  mimeType     String
+  documentType String    // prescription, lab_report, discharge_summary, radiology, other
+  fileHash     String?
+  totalPages   Int       @default(1)
+  uploadDate   DateTime  @default(now())
+  clinicalDate DateTime?
+  status       String    @default("uploaded") // uploaded, processing, ready, failed
+  provenance   String    @default("DOCUMENT_EXTRACTED")
+
+  patient   Patient                 @relation(fields: [patientUid], references: [patientUid], onDelete: Cascade)
+  encounter Encounter?              @relation(fields: [encounterId], references: [encounterId], onDelete: SetNull)
+  pages     DocumentPage[]
+  jobs      DocumentProcessingJob[]
+  approvals DocumentApproval[]
+  ragJobs   RAGIngestionJob[]
+
+  @@index([patientUid])
+  @@index([encounterId])
+  @@index([fileHash])
+}
+
+model DocumentPage {
+  id            Int      @id @default(autoincrement())
+  documentId    String
+  pageNumber    Int
+  extractedText String
+  ocrStatus     String   @default("native_text") // native_text, ocr_processed, ocr_failed
+  ocrConfidence Float?
+  createdAt     DateTime @default(now())
+
+  document Document @relation(fields: [documentId], references: [documentId], onDelete: Cascade)
+
+  @@unique([documentId, pageNumber])
+  @@index([documentId])
+}
+
+model DocumentProcessingJob {
+  id           Int       @id @default(autoincrement())
+  jobId        String    @unique
+  documentId   String
+  jobType      String    // TEXT_EXTRACTION, OCR_ENHANCEMENT
+  status       String    @default("queued") // queued, processing, completed, failed
+  retryCount   Int       @default(0)
+  errorDetails String?
+  startedAt    DateTime?
+  completedAt  DateTime?
+
+  document Document @relation(fields: [documentId], references: [documentId], onDelete: Cascade)
+
+  @@index([documentId])
+  @@index([status])
+}
+
+model DocumentApproval {
+  id               Int      @id @default(autoincrement())
+  documentId       String
+  approvedByUserId Int
+  action           String   // APPROVED, REJECTED, REQUIRES_RESCAN
+  comments         String?
+  approvedAt       DateTime @default(now())
+
+  document   Document @relation(fields: [documentId], references: [documentId], onDelete: Cascade)
+  approvedBy User     @relation(fields: [approvedByUserId], references: [id])
+
+  @@index([documentId])
+  @@index([approvedByUserId])
+}
+
+model RAGIngestionJob {
+  id           Int       @id @default(autoincrement())
+  jobId        String    @unique
+  documentId   String
+  patientUid   String
+  chunkCount   Int       @default(0)
+  status       String    @default("queued") // queued, indexing, completed, failed
+  errorDetails String?
+  startedAt    DateTime?
+  completedAt  DateTime?
+
+  document Document @relation(fields: [documentId], references: [documentId], onDelete: Cascade)
+
+  @@index([documentId])
+  @@index([patientUid])
+  @@index([status])
+}
+
+model PatientConsent {
+  id               Int       @id @default(autoincrement())
+  patientUid       String
+  consentType      String    // data_collection, ai_processing, document_processing, record_sharing, abha_integration
+  purpose          String
+  policyVersion    String
+  granted          Boolean
+  grantedAt        DateTime  @default(now())
+  withdrawnAt      DateTime?
+  capturedByType   String    // kiosk_self, staff_assisted, verbal_with_witness
+  capturedByUserId Int?
+  source           String    @default("medsync_kiosk")
+
+  patient    Patient @relation(fields: [patientUid], references: [patientUid], onDelete: Cascade)
+  capturedBy User?   @relation(fields: [capturedByUserId], references: [id])
+
+  @@index([patientUid])
+  @@index([consentType])
+}
+
+model AuditLog {
+  id            Int      @id @default(autoincrement())
+  patientUid    String?
+  actorType     String   // USER, DEVICE, SERVICE, SYSTEM
+  actorUserId   Int?     // Set strictly when actorType == "USER"
+  actorDeviceId String?  // Terminal ID when actorType == "DEVICE"
+  actorService  String?  // Service name when actorType == "SERVICE"
+  action        String   // PATIENT_LOOKUP, REGISTER_PATIENT, CLAIM_ENCOUNTER, etc.
+  resourceType  String   // patient, encounter, care_relationship, document, rag_query
+  resourceId    String?
+  timestamp     DateTime @default(now())
+  metadataJson  String?
+
+  patient   Patient? @relation(fields: [patientUid], references: [patientUid], onDelete: SetNull)
+  actorUser User?    @relation("UserAuditLogs", fields: [actorUserId], references: [id])
+
+  @@index([patientUid])
+  @@index([actorUserId])
+  @@index([actorType, action])
+  @@index([timestamp])
+}

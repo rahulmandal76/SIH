@@ -1080,7 +1080,15 @@ export const DoctorDashboardPage = () => {
                                 )}
                               </td>
                               <td className="px-3 py-3.5 whitespace-nowrap">
-                                {isCompleted ? (
+                                {!pt.chamber ? (
+                                  <span
+                                    className="text-amber-800 font-bold bg-amber-50 border border-amber-300 px-2.5 py-1 rounded-lg text-[10px] inline-flex items-center gap-1 shadow-2xs whitespace-nowrap"
+                                    title="Encounter has no chamber assignment. Option B policy: doctor cannot claim until clinical staff routes it."
+                                  >
+                                    <AlertTriangle size={11} className="text-amber-600 shrink-0" />
+                                    <span>Routing Required</span>
+                                  </span>
+                                ) : isCompleted ? (
                                   <button
                                     onClick={(e) => handleToggleConsultationStatus(pt.token, e, "incomplete")}
                                     className="text-emerald-800 font-extrabold bg-emerald-100 hover:bg-emerald-200 border border-emerald-300 px-2.5 py-1 rounded-lg text-[10px] inline-flex items-center gap-1 shadow-2xs transition cursor-pointer whitespace-nowrap"
@@ -1285,6 +1293,53 @@ export const DoctorDashboardPage = () => {
                   </div>
                 )}
 
+                {/* Chamber Routing Required Alert (Option B Policy) */}
+                {!selectedPatient.chamber && (
+                  <div className="bg-amber-50 border border-amber-300 p-3.5 rounded-2xl text-xs text-amber-900 space-y-2">
+                    <div className="flex items-start gap-2">
+                      <AlertTriangle size={16} className="text-amber-600 shrink-0 mt-0.5" />
+                      <div>
+                        <strong className="font-bold">Chamber Routing Required (Option B Policy)</strong>
+                        <p className="text-[11px] mt-0.5 text-amber-800">
+                          Encounter #{selectedPatient.token} has no assigned OPD chamber. Per Phase 4 policy, an unrouted encounter cannot be claimed or consulted by a doctor until clinical staff routes it.
+                        </p>
+                      </div>
+                    </div>
+                    <div className="pt-1 flex flex-wrap items-center gap-2">
+                      <span className="text-[10px] font-extrabold text-amber-950 uppercase">Clinical Staff Routing:</span>
+                      <select
+                        id="chamber-assign-select"
+                        className="bg-white border border-amber-300 rounded-lg px-2 py-1 text-xs font-bold text-slate-800 focus:outline-none"
+                        defaultValue="OPD Chamber #04 - General Medicine"
+                      >
+                        <option value="OPD Chamber #04 - General Medicine">Chamber #04 — General Medicine</option>
+                        <option value="OPD Chamber #07 - Cardiology">Chamber #07 — Cardiology</option>
+                        <option value="OPD Chamber #02 - AYUSH & Traditional">Chamber #02 — AYUSH</option>
+                      </select>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const sel = document.getElementById("chamber-assign-select");
+                          const chosen = sel?.value || "OPD Chamber #04 - General Medicine";
+                          const routedPt = { ...selectedPatient, chamber: chosen };
+                          setSelectedPatient(routedPt);
+                          if (setPatientData) setPatientData(routedPt);
+                          if (setActiveQueue) {
+                            setActiveQueue((prev) =>
+                              (prev || []).map((p) =>
+                                isTokenMatch(p.token, selectedPatient.token) ? { ...p, chamber: chosen } : p
+                              )
+                            );
+                          }
+                        }}
+                        className="bg-amber-600 hover:bg-amber-700 text-white font-extrabold text-[11px] px-3 py-1 rounded-lg cursor-pointer transition shadow-2xs"
+                      >
+                        Assign Chamber & Enable Claim
+                      </button>
+                    </div>
+                  </div>
+                )}
+
                 {/* Panel Tabs: Summary vs AI Chat Transcript */}
                 <div className="flex gap-2 border-b border-slate-200 pb-2">
                   <button
@@ -1396,7 +1451,15 @@ export const DoctorDashboardPage = () => {
                     >
                       <Edit size={14} /> Edit Summary
                     </button>
-                    {isPatientCompleted(selectedPatient) ? (
+                    {!selectedPatient.chamber ? (
+                      <div
+                        className="flex-1 bg-amber-100 border border-amber-300 text-amber-900 font-bold text-xs py-2.5 rounded-xl flex items-center justify-center gap-1.5 shadow-2xs"
+                        title="Option B: Encounter must be routed to a chamber before consultation can be finalized."
+                      >
+                        <AlertTriangle size={14} className="text-amber-600 shrink-0" />
+                        <span>Chamber Routing Required</span>
+                      </div>
+                    ) : isPatientCompleted(selectedPatient) ? (
                       <button
                         onClick={() => handleToggleConsultationStatus(selectedPatient.token, null, "incomplete")}
                         className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs py-2.5 rounded-xl flex items-center justify-center gap-1.5 shadow-md transition cursor-pointer"
