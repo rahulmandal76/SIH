@@ -78,6 +78,187 @@ export const DoctorDashboardPage = () => {
   const [selectedDocModal, setSelectedDocModal] = useState(null);
   const [selectedHistoryModal, setSelectedHistoryModal] = useState(null);
 
+  // Phase 5C Document Review & Approval State
+  const [docReviewBundle, setDocReviewBundle] = useState(null);
+  const [reviewLoading, setReviewLoading] = useState(false);
+  const [reviewMsg, setReviewMsg] = useState("");
+  const [editingPageNum, setEditingPageNum] = useState(null);
+  const [editingPageText, setEditingPageText] = useState("");
+  const [editingFactId, setEditingFactId] = useState(null);
+  const [editingFactForm, setEditingFactForm] = useState({ factKey: "", factValue: "", unit: "", factType: "diagnosis" });
+
+  useEffect(() => {
+    const docId = selectedDocModal?.documentId || selectedDocModal?.id;
+    if (docId && typeof docId === "string" && docId.startsWith("DOC-")) {
+      setReviewLoading(true);
+      setReviewMsg("");
+      fetch(`/api/documents/${docId}/review`, { credentials: "include" })
+        .then(r => r.json())
+        .then(data => {
+          if (data.success) {
+            setDocReviewBundle(data);
+          } else {
+            setDocReviewBundle(null);
+          }
+        })
+        .catch(() => setDocReviewBundle(null))
+        .finally(() => setReviewLoading(false));
+    } else {
+      setDocReviewBundle(null);
+    }
+  }, [selectedDocModal]);
+
+  const refreshReviewBundle = async (docId) => {
+    try {
+      const res = await fetch(`/api/documents/${docId}/review`, { credentials: "include" });
+      const data = await res.json();
+      if (data.success) setDocReviewBundle(data);
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const handleApproveDoc = async (action) => {
+    if (!docReviewBundle) return;
+    const docId = docReviewBundle.document?.documentId;
+    setReviewLoading(true);
+    setReviewMsg("");
+    try {
+      const res = await fetch(`/api/documents/${docId}/approve`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          expectedVersion: docReviewBundle.currentVersion,
+          action
+        })
+      });
+      const data = await res.json();
+      if (data.success) {
+        setReviewMsg(`Document marked ${action} on v${data.approvedVersion}`);
+        await refreshReviewBundle(docId);
+      } else {
+        setReviewMsg(`Error: ${data.error?.message || "Failed to update approval"}`);
+      }
+    } catch (err) {
+      setReviewMsg(`Error: ${err.message}`);
+    } finally {
+      setReviewLoading(false);
+    }
+  };
+
+  const handleExtractDocFacts = async () => {
+    if (!docReviewBundle) return;
+    const docId = docReviewBundle.document?.documentId;
+    setReviewLoading(true);
+    setReviewMsg("");
+    try {
+      const res = await fetch(`/api/documents/${docId}/extract`, {
+        method: "POST",
+        credentials: "include"
+      });
+      const data = await res.json();
+      if (data.success) {
+        setReviewMsg(data.alreadyExtracted ? `Facts already extracted (${data.count} facts)` : `Extracted ${data.count} clinical facts`);
+        await refreshReviewBundle(docId);
+      } else {
+        setReviewMsg(`Extraction error: ${data.error?.message || "Failed"}`);
+      }
+    } catch (err) {
+      setReviewMsg(`Extraction error: ${err.message}`);
+    } finally {
+      setReviewLoading(false);
+    }
+  };
+
+  const handleSavePageCorrection = async (pageNum) => {
+    if (!docReviewBundle) return;
+    const docId = docReviewBundle.document?.documentId;
+    setReviewLoading(true);
+    setReviewMsg("");
+    try {
+      const res = await fetch(`/api/documents/${docId}/pages/${pageNum}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          expectedVersion: docReviewBundle.currentVersion,
+          extractedText: editingPageText
+        })
+      });
+      const data = await res.json();
+      if (data.success) {
+        setReviewMsg(`Created version snapshot v${data.newVersion} with corrected page text`);
+        setEditingPageNum(null);
+        await refreshReviewBundle(docId);
+      } else {
+        setReviewMsg(`Page edit error: ${data.error?.message || "Failed"}`);
+      }
+    } catch (err) {
+      setReviewMsg(`Page edit error: ${err.message}`);
+    } finally {
+      setReviewLoading(false);
+    }
+  };
+
+  const handleSaveFactCorrection = async (factId) => {
+    if (!docReviewBundle) return;
+    const docId = docReviewBundle.document?.documentId;
+    setReviewLoading(true);
+    setReviewMsg("");
+    try {
+      const res = await fetch(`/api/documents/${docId}/facts/${factId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          expectedVersion: docReviewBundle.currentVersion,
+          ...editingFactForm
+        })
+      });
+      const data = await res.json();
+      if (data.success) {
+        setReviewMsg(`Created version snapshot v${data.newVersion} with updated fact (DOCTOR_ENTERED)`);
+        setEditingFactId(null);
+        await refreshReviewBundle(docId);
+      } else {
+        setReviewMsg(`Fact edit error: ${data.error?.message || "Failed"}`);
+      }
+    } catch (err) {
+      setReviewMsg(`Fact edit error: ${err.message}`);
+    } finally {
+      setReviewLoading(false);
+    }
+  };
+
+  const handleVoidFact = async (factId) => {
+    if (!docReviewBundle) return;
+    const docId = docReviewBundle.document?.documentId;
+    setReviewLoading(true);
+    setReviewMsg("");
+    try {
+      const res = await fetch(`/api/documents/${docId}/facts/${factId}`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          expectedVersion: docReviewBundle.currentVersion
+        })
+      });
+      const data = await res.json();
+      if (data.success) {
+        setReviewMsg(`Created version snapshot v${data.newVersion} omitting removed fact`);
+        await refreshReviewBundle(docId);
+      } else {
+        setReviewMsg(`Fact removal error: ${data.error?.message || "Failed"}`);
+      }
+    } catch (err) {
+      setReviewMsg(`Fact removal error: ${err.message}`);
+    } finally {
+      setReviewLoading(false);
+    }
+  };
+
   const handleDownloadSingleDoc = (docItem) => {
     try {
       const tempDoc = new jsPDF();
@@ -1920,6 +2101,269 @@ export const DoctorDashboardPage = () => {
                 <p className="text-amber-950 font-medium leading-relaxed">
                   {selectedDocModal.extractedData.doctorAdvice}
                 </p>
+              </div>
+            )}
+
+            {/* PHASE 5C: Clinician Review & Doctor Approval Gate */}
+            {docReviewBundle && (
+              <div className="border border-blue-200 bg-gradient-to-br from-blue-50/50 to-indigo-50/30 rounded-3xl p-5 space-y-4 shadow-sm">
+                <div className="flex flex-wrap items-center justify-between gap-2 border-b border-blue-200 pb-3">
+                  <div className="flex items-center gap-2">
+                    <ShieldCheck className="text-blue-600" size={20} />
+                    <span className="font-extrabold text-sm text-slate-900">
+                      Clinical Derivative Snapshot
+                    </span>
+                    <span className="bg-blue-600 text-white font-mono text-xs px-2.5 py-0.5 rounded-full font-bold">
+                      v{docReviewBundle.currentVersion}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className={`text-[11px] font-black uppercase px-2.5 py-1 rounded-xl flex items-center gap-1 ${
+                      docReviewBundle.status === "approved"
+                        ? "bg-emerald-100 text-emerald-800 border border-emerald-300"
+                        : docReviewBundle.status === "pending_review"
+                        ? "bg-amber-100 text-amber-800 border border-amber-300"
+                        : docReviewBundle.status === "rejected"
+                        ? "bg-rose-100 text-rose-800 border border-rose-300"
+                        : docReviewBundle.status === "requires_rescan"
+                        ? "bg-orange-100 text-orange-800 border border-orange-300"
+                        : "bg-slate-100 text-slate-800 border border-slate-300"
+                    }`}>
+                      {docReviewBundle.status === "approved" && <CheckCircle size={12} />}
+                      {docReviewBundle.status === "approved" ? "Clinically Approved (RAG Eligible)" : `Status: ${docReviewBundle.status}`}
+                    </span>
+                  </div>
+                </div>
+
+                {reviewMsg && (
+                  <div className="p-3 bg-blue-100/70 border border-blue-300 text-blue-900 text-xs rounded-xl font-semibold">
+                    {reviewMsg}
+                  </div>
+                )}
+
+                {/* Extract Facts Button if in ready state */}
+                {docReviewBundle.status === "ready" && (
+                  <div className="p-3 bg-white border border-blue-200 rounded-2xl flex items-center justify-between">
+                    <div>
+                      <p className="text-xs font-bold text-slate-800">Ready for Clinical Fact Extraction</p>
+                      <p className="text-[11px] text-slate-500">Run structured extraction across diagnoses, medications, labs, vitals, procedures, and symptoms.</p>
+                    </div>
+                    <button
+                      onClick={handleExtractDocFacts}
+                      disabled={reviewLoading}
+                      className="bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs px-4 py-2 rounded-xl cursor-pointer disabled:opacity-50"
+                    >
+                      {reviewLoading ? "Extracting..." : "Extract Facts (v1)"}
+                    </button>
+                  </div>
+                )}
+
+                {/* Extracted Facts List */}
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <h5 className="text-xs font-black uppercase text-slate-900 tracking-wider flex items-center gap-1.5">
+                      <Sparkles size={14} className="text-indigo-600" />
+                      Structured Clinical Facts ({docReviewBundle.facts?.length || 0})
+                    </h5>
+                    {docReviewBundle.status === "pending_review" && (
+                      <button
+                        onClick={handleExtractDocFacts}
+                        disabled={reviewLoading}
+                        className="text-[11px] text-blue-600 font-bold hover:underline cursor-pointer"
+                      >
+                        Re-extract Facts
+                      </button>
+                    )}
+                  </div>
+
+                  {docReviewBundle.facts && docReviewBundle.facts.length > 0 ? (
+                    <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
+                      {docReviewBundle.facts.map((fact) => (
+                        <div key={fact.id} className="bg-white p-3 rounded-2xl border border-slate-200 text-xs space-y-1.5 shadow-2xs">
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2">
+                              <span className={`text-[10px] font-black uppercase px-2 py-0.5 rounded-md ${
+                                fact.factType === "diagnosis" ? "bg-purple-100 text-purple-800" :
+                                fact.factType === "medication" ? "bg-blue-100 text-blue-800" :
+                                fact.factType === "lab_result" ? "bg-cyan-100 text-cyan-800" :
+                                fact.factType === "vital" ? "bg-emerald-100 text-emerald-800" :
+                                fact.factType === "procedure" ? "bg-indigo-100 text-indigo-800" : "bg-amber-100 text-amber-800"
+                              }`}>
+                                {fact.factType}
+                              </span>
+                              <strong className="text-slate-900 font-bold">{fact.factKey}</strong>
+                              <span className="text-slate-600 font-medium">: {fact.factValue}</span>
+                              {fact.unit && <span className="text-slate-500 font-mono text-[11px]">({fact.unit})</span>}
+                            </div>
+                            <span className="text-[10px] font-mono text-slate-400 bg-slate-100 px-2 py-0.5 rounded">
+                              {fact.provenance}
+                            </span>
+                          </div>
+
+                          {/* Inline Fact Editor */}
+                          {editingFactId === fact.id ? (
+                            <div className="pt-2 border-t border-slate-100 space-y-2 bg-slate-50 p-2.5 rounded-xl">
+                              <div className="grid grid-cols-2 gap-2">
+                                <div>
+                                  <label className="text-[10px] font-bold text-slate-600">Key:</label>
+                                  <input
+                                    type="text"
+                                    value={editingFactForm.factKey}
+                                    onChange={(e) => setEditingFactForm({ ...editingFactForm, factKey: e.target.value })}
+                                    className="w-full bg-white border border-slate-300 rounded px-2 py-1 text-xs"
+                                  />
+                                </div>
+                                <div>
+                                  <label className="text-[10px] font-bold text-slate-600">Value:</label>
+                                  <input
+                                    type="text"
+                                    value={editingFactForm.factValue}
+                                    onChange={(e) => setEditingFactForm({ ...editingFactForm, factValue: e.target.value })}
+                                    className="w-full bg-white border border-slate-300 rounded px-2 py-1 text-xs"
+                                  />
+                                </div>
+                              </div>
+                              <div className="flex justify-end gap-2 pt-1">
+                                <button
+                                  onClick={() => setEditingFactId(null)}
+                                  className="text-[11px] text-slate-500 px-2 py-1 cursor-pointer"
+                                >
+                                  Cancel
+                                </button>
+                                <button
+                                  onClick={() => handleSaveFactCorrection(fact.id)}
+                                  disabled={reviewLoading}
+                                  className="bg-blue-600 hover:bg-blue-700 text-white font-bold text-[11px] px-3 py-1 rounded-lg cursor-pointer disabled:opacity-50"
+                                >
+                                  Save Correction (Creates v{docReviewBundle.currentVersion + 1})
+                                </button>
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="flex justify-end items-center gap-3 pt-1 text-[11px]">
+                              <button
+                                onClick={() => {
+                                  setEditingFactId(fact.id);
+                                  setEditingFactForm({
+                                    factKey: fact.factKey,
+                                    factValue: fact.factValue,
+                                    unit: fact.unit || "",
+                                    factType: fact.factType
+                                  });
+                                }}
+                                className="text-blue-600 font-bold hover:underline cursor-pointer flex items-center gap-1"
+                              >
+                                <Edit size={11} /> Correct Fact
+                              </button>
+                              <button
+                                onClick={() => handleVoidFact(fact.id)}
+                                disabled={reviewLoading}
+                                className="text-rose-600 font-bold hover:underline cursor-pointer"
+                              >
+                                Remove Fact
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-slate-400 text-xs italic">No clinical facts extracted yet for this derivative version.</p>
+                  )}
+                </div>
+
+                {/* Page Text Transcription Section */}
+                {docReviewBundle.pages && docReviewBundle.pages.length > 0 && (
+                  <div className="space-y-2 border-t border-blue-200 pt-3">
+                    <h5 className="text-xs font-black uppercase text-slate-900 tracking-wider">
+                      Page Transcriptions ({docReviewBundle.pages.length} Pages)
+                    </h5>
+                    {docReviewBundle.pages.map((p) => (
+                      <div key={p.pageNumber} className="bg-white p-3 rounded-2xl border border-slate-200 text-xs space-y-2">
+                        <div className="flex items-center justify-between">
+                          <span className="font-bold text-slate-800">Page {p.pageNumber}</span>
+                          <span className="text-[10px] bg-slate-100 text-slate-600 font-mono px-2 py-0.5 rounded">
+                            {p.ocrStatus} {p.ocrConfidence ? `(${(p.ocrConfidence * 100).toFixed(0)}%)` : ""}
+                          </span>
+                        </div>
+
+                        {editingPageNum === p.pageNumber ? (
+                          <div className="space-y-2">
+                            <textarea
+                              value={editingPageText}
+                              onChange={(e) => setEditingPageText(e.target.value)}
+                              rows={4}
+                              className="w-full bg-slate-50 border border-slate-300 rounded-xl p-2.5 text-xs font-mono"
+                            />
+                            <div className="flex justify-end gap-2">
+                              <button
+                                onClick={() => setEditingPageNum(null)}
+                                className="text-xs text-slate-500 px-3 py-1 cursor-pointer"
+                              >
+                                Cancel
+                              </button>
+                              <button
+                                onClick={() => handleSavePageCorrection(p.pageNumber)}
+                                disabled={reviewLoading}
+                                className="bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs px-3 py-1.5 rounded-xl cursor-pointer disabled:opacity-50"
+                              >
+                                Save Correction (Creates v{docReviewBundle.currentVersion + 1})
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <div>
+                            <p className="text-slate-700 bg-slate-50 p-2.5 rounded-xl font-mono text-[11px] whitespace-pre-wrap max-h-32 overflow-y-auto">
+                              {p.extractedText || "(No text content extracted)"}
+                            </p>
+                            <div className="flex justify-end pt-1">
+                              <button
+                                onClick={() => {
+                                  setEditingPageNum(p.pageNumber);
+                                  setEditingPageText(p.extractedText);
+                                }}
+                                className="text-blue-600 font-bold hover:underline text-[11px] cursor-pointer"
+                              >
+                                Correct Transcription
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* Doctor Approval Action Bar */}
+                <div className="border-t border-blue-200 pt-3 flex flex-wrap items-center justify-between gap-2">
+                  <div className="text-[11px] text-slate-500">
+                    Expected Version: <strong className="text-slate-800">v{docReviewBundle.currentVersion}</strong>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => handleApproveDoc("REQUIRES_RESCAN")}
+                      disabled={reviewLoading || docReviewBundle.status !== "pending_review"}
+                      className="bg-orange-50 hover:bg-orange-100 text-orange-800 border border-orange-300 font-bold text-xs px-3 py-1.5 rounded-xl cursor-pointer disabled:opacity-40"
+                    >
+                      Request Rescan
+                    </button>
+                    <button
+                      onClick={() => handleApproveDoc("REJECTED")}
+                      disabled={reviewLoading || docReviewBundle.status !== "pending_review"}
+                      className="bg-rose-50 hover:bg-rose-100 text-rose-800 border border-rose-300 font-bold text-xs px-3 py-1.5 rounded-xl cursor-pointer disabled:opacity-40"
+                    >
+                      Reject
+                    </button>
+                    <button
+                      onClick={() => handleApproveDoc("APPROVED")}
+                      disabled={reviewLoading || docReviewBundle.status !== "pending_review"}
+                      className="bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs px-4 py-1.5 rounded-xl cursor-pointer shadow-sm disabled:opacity-40 flex items-center gap-1"
+                    >
+                      <CheckCircle2 size={13} />
+                      Approve v{docReviewBundle.currentVersion}
+                    </button>
+                  </div>
+                </div>
               </div>
             )}
 

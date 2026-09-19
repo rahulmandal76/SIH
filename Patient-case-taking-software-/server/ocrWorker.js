@@ -103,9 +103,10 @@ export class DocumentOCRWorker {
 
       await this.prisma.documentPage.upsert({
         where: {
-          documentId_pageNumber: {
+          documentId_pageNumber_version: {
             documentId: doc.documentId,
-            pageNumber: p.pageNumber
+            pageNumber: p.pageNumber,
+            version: doc.derivativeVersion || 1
           }
         },
         update: {
@@ -116,6 +117,7 @@ export class DocumentOCRWorker {
         create: {
           documentId: doc.documentId,
           pageNumber: p.pageNumber,
+          version: doc.derivativeVersion || 1,
           extractedText: pageText,
           ocrStatus: "native_text",
           ocrConfidence: 1.0
@@ -171,9 +173,10 @@ export class DocumentOCRWorker {
       // Deterministic OCR failure: Record page as ocr_failed
       await this.prisma.documentPage.upsert({
         where: {
-          documentId_pageNumber: {
+          documentId_pageNumber_version: {
             documentId: doc.documentId,
-            pageNumber: 1
+            pageNumber: 1,
+            version: doc.derivativeVersion || 1
           }
         },
         update: {
@@ -184,6 +187,7 @@ export class DocumentOCRWorker {
         create: {
           documentId: doc.documentId,
           pageNumber: 1,
+          version: doc.derivativeVersion || 1,
           extractedText: "",
           ocrStatus: "ocr_failed",
           ocrConfidence: 0.0
@@ -220,9 +224,10 @@ export class DocumentOCRWorker {
 
     await this.prisma.documentPage.upsert({
       where: {
-        documentId_pageNumber: {
+        documentId_pageNumber_version: {
           documentId: doc.documentId,
-          pageNumber: 1
+          pageNumber: 1,
+          version: doc.derivativeVersion || 1
         }
       },
       update: {
@@ -233,6 +238,7 @@ export class DocumentOCRWorker {
       create: {
         documentId: doc.documentId,
         pageNumber: 1,
+        version: doc.derivativeVersion || 1,
         extractedText: ocrText,
         ocrStatus: "ocr_processed",
         ocrConfidence: confidence
@@ -260,11 +266,23 @@ export class DocumentOCRWorker {
   }
 
   /**
-   * Fetch extracted pages for a document
+   * Fetch extracted pages for a document (defaults to current derivativeVersion if not specified)
    */
-  async getDocumentPages(documentId) {
+  async getDocumentPages(documentId, version) {
+    const where = { documentId };
+    if (version !== undefined) {
+      where.version = version;
+    } else {
+      const doc = await this.prisma.document.findUnique({
+        where: { documentId },
+        select: { derivativeVersion: true }
+      });
+      if (doc) {
+        where.version = doc.derivativeVersion;
+      }
+    }
     return this.prisma.documentPage.findMany({
-      where: { documentId },
+      where,
       orderBy: { pageNumber: "asc" }
     });
   }
@@ -273,12 +291,17 @@ export class DocumentOCRWorker {
    * Fetch full lifecycle status of a document
    */
   async getDocumentStatus(documentId) {
-    return this.prisma.document.findUnique({
+    const doc = await this.prisma.document.findUnique({
       where: { documentId },
       include: {
-        pages: { orderBy: { pageNumber: "asc" } },
         jobs: { orderBy: { id: "desc" }, take: 1 }
       }
     });
+    if (!doc) return null;
+    const pages = await this.prisma.documentPage.findMany({
+      where: { documentId, version: doc.derivativeVersion },
+      orderBy: { pageNumber: "asc" }
+    });
+    return { ...doc, pages };
   }
 }

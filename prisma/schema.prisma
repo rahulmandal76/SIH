@@ -52,6 +52,7 @@ model Patient {
   consents          PatientConsent[]
   auditLogs         AuditLog[]
   interviewSessions InterviewSession[]
+  clinicalFacts     DocumentClinicalFact[]
 
   @@index([mobileNumber])
   @@index([abhaNumber])
@@ -129,16 +130,20 @@ model Document {
   status       String    @default("uploaded") // uploaded, processing, ready, failed
   provenance   String    @default("DOCUMENT_EXTRACTED")
 
-  patient   Patient                 @relation(fields: [patientUid], references: [patientUid], onDelete: Cascade)
-  encounter Encounter?              @relation(fields: [encounterId], references: [encounterId], onDelete: SetNull)
-  pages     DocumentPage[]
-  jobs      DocumentProcessingJob[]
-  approvals DocumentApproval[]
-  ragJobs   RAGIngestionJob[]
+  derivativeVersion Int       @default(1)
+
+  patient       Patient                 @relation(fields: [patientUid], references: [patientUid], onDelete: Cascade)
+  encounter     Encounter?              @relation(fields: [encounterId], references: [encounterId], onDelete: SetNull)
+  pages         DocumentPage[]
+  jobs          DocumentProcessingJob[]
+  approvals     DocumentApproval[]
+  ragJobs       RAGIngestionJob[]
+  clinicalFacts DocumentClinicalFact[]
 
   @@index([patientUid])
   @@index([encounterId])
   @@index([fileHash])
+  @@index([status])
 }
 
 model DocumentPage {
@@ -148,12 +153,13 @@ model DocumentPage {
   extractedText String
   ocrStatus     String   @default("native_text") // native_text, ocr_processed, ocr_failed
   ocrConfidence Float?
+  version       Int      @default(1)
   createdAt     DateTime @default(now())
 
   document Document @relation(fields: [documentId], references: [documentId], onDelete: Cascade)
 
-  @@unique([documentId, pageNumber])
-  @@index([documentId])
+  @@unique([documentId, pageNumber, version])
+  @@index([documentId, version])
 }
 
 model DocumentProcessingJob {
@@ -177,6 +183,7 @@ model DocumentApproval {
   id               Int      @id @default(autoincrement())
   documentId       String
   approvedByUserId Int
+  approvedVersion  Int      @default(1)
   action           String   // APPROVED, REJECTED, REQUIRES_RESCAN
   comments         String?
   approvedAt       DateTime @default(now())
@@ -184,8 +191,34 @@ model DocumentApproval {
   document   Document @relation(fields: [documentId], references: [documentId], onDelete: Cascade)
   approvedBy User     @relation(fields: [approvedByUserId], references: [id])
 
-  @@index([documentId])
+  @@index([documentId, approvedVersion])
   @@index([approvedByUserId])
+}
+
+model DocumentClinicalFact {
+  id           Int       @id @default(autoincrement())
+  documentId   String
+  patientUid   String
+  pageNumber   Int
+  factType     String    // diagnosis, medication, lab_result, vital, procedure, symptom
+  factKey      String    // e.g. "Metformin", "Type 2 Diabetes", "HbA1c", "Blood Pressure"
+  factValue    String    // e.g. "500mg", "Confirmed", "7.8%", "130/80 mmHg"
+  unit         String?   // e.g. "mg", "%", "mmHg", "mg/dL", "mL/min"
+  clinicalDate DateTime?
+  confidence   Float     @default(1.0)
+  provenance   String    // DOCUMENT_EXTRACTED, OCR_EXTRACTED, DOCTOR_APPROVED, DOCTOR_ENTERED
+  version      Int       @default(1)
+  parentFactId Int?      // Lineage pointer to prior version fact
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @default(now())
+
+  document Document @relation(fields: [documentId], references: [documentId], onDelete: Cascade)
+  patient  Patient  @relation(fields: [patientUid], references: [patientUid], onDelete: Cascade)
+
+  @@index([documentId, version])
+  @@index([patientUid])
+  @@index([factKey])
+  @@index([factType])
 }
 
 model RAGIngestionJob {
@@ -255,6 +288,7 @@ model InterviewSession {
   encounterId       String
   complaintCategory String?
   status            String    @default("in_progress") // in_progress, review_dirty, completed, abandoned
+  isDirty           Boolean   @default(false)
   totalQuestions    Int       @default(0)
   createdAt         DateTime  @default(now())
   completedAt       DateTime?

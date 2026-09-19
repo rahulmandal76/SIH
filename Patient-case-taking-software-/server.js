@@ -76,6 +76,7 @@ import { InterviewPlanner } from "./server/interviewPlanner.js";
 import multer from "multer";
 import { DocumentIngestionService, MAX_UPLOAD_BYTES } from "./server/documentIngestion.js";
 import { DocumentOCRWorker } from "./server/ocrWorker.js";
+import { clinicalFactExtractor, ClinicalFactSchema } from "./server/clinicalFactExtractor.js";
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -248,6 +249,11 @@ const ERR = {
   FILE_TOO_LARGE:              (res, msg)        => errorResponse(res, 413, "FILE_TOO_LARGE", msg),
   UNSUPPORTED_MEDIA_TYPE:      (res, msg)        => errorResponse(res, 415, "UNSUPPORTED_MEDIA_TYPE", msg),
   DOCUMENT_NOT_FOUND:          (res, msg)        => errorResponse(res, 404, "DOCUMENT_NOT_FOUND", msg),
+  VERSION_CONFLICT:                  (res, msg, extra) => errorResponse(res, 409, "VERSION_CONFLICT", msg, extra),
+  CLINICAL_APPROVAL_REQUIRES_DOCTOR: (res, msg)        => errorResponse(res, 403, "CLINICAL_APPROVAL_REQUIRES_DOCTOR", msg),
+  ADMIN_CANNOT_EDIT_CLINICAL_FACTS:  (res, msg)        => errorResponse(res, 403, "ADMIN_CANNOT_EDIT_CLINICAL_FACTS", msg),
+  FACT_NOT_FOUND:                    (res, msg)        => errorResponse(res, 404, "FACT_NOT_FOUND", msg),
+  INVALID_DOCUMENT_STATUS:           (res, msg)        => errorResponse(res, 409, "INVALID_DOCUMENT_STATUS", msg),
 };
 
 // --------------------------------------------------------------------------
@@ -2433,6 +2439,1022 @@ app.get("/api/documents/:id/status", async (req, res) => {
 });
 
 // --------------------------------------------------------------------------
+// 16B. Phase 5C: Clinical Fact Extraction, Complete Version Snapshots,
+//      Clinical Review & Doctor Approval Gate
+// --------------------------------------------------------------------------
+
+function sanitizeFact(fact) {
+  if (!fact) return null;
+  const { patientUid, ...safeFact } = fact;
+  return safeFact;
+}
+
+export function isDocumentRAGEligible(doc, latestApproval) {
+  if (!doc || !latestApproval) return false;
+  return (
+    doc.status === "approved" &&
+    doc.derivativeVersion === latestApproval.approvedVersion &&
+    latestApproval.action === "APPROVED"
+  );
+}
+
+async function authorizeClinicianForDocument(req, res, doc, { allowAdmin = true, requireDoctorOnly = false } = {}) {
+  // Reject browser attempts to pass patient identifiers in body or query
+  if (req.query && (req.query.patientUid !== undefined || req.query.patientId !== undefined)) {
+    logRequest(req, 400, { securityViolation: "patientUid_in_query" });
+    ERR.VALIDATION_ERROR(res, "Public document APIs do not accept patientUid or patientId in query parameters. Identity is derived server-side from session context.");
+    return null;
+  }
+  if (req.body && (req.body.patientUid !== undefined || req.body.patientId !== undefined)) {
+    logRequest(req, 400, { securityViolation: "patientUid_in_body" });
+    ERR.VALIDATION_ERROR(res, "Public document APIs do not accept patientUid or patientId in request body. Identity is derived server-side from session context.");
+    return null;
+  }
+
+  const userCtx = getUserSessionContext(req);
+  if (!userCtx) {
+    logRequest(req, 403, { reason: "session_not_clinician" });
+    ERR.CLINICAL_ACCESS_DENIED(res, "Clinical operation requires an authenticated clinician or admin session");
+    return null;
+  }
+
+  if (userCtx.role === "doctor") {
+    const hasEncounter = await prisma.encounter.findFirst({
+      where: {
+        patientUid: doc.patientUid,
+        assignedDoctorId: userCtx.id
+      }
+    });
+
+    const hasCareRel = await prisma.careRelationship.findFirst({
+      where: {
+        patientUid: doc.patientUid,
+        doctorId: userCtx.id,
+        status: "active",
+        OR: [
+          { expiresAt: null },
+          { expiresAt: { gt: new Date() } }
+        ],
+        endedAt: null
+      }
+    });
+
+    if (!hasEncounter && !hasCareRel) {
+      logRequest(req, 403, { reason: "doctor_not_authorized_for_patient" });
+      ERR.CLINICAL_ACCESS_DENIED(res, "Doctor is not assigned to this encounter and has no active CareRelationship with patient");
+      return null;
+    }
+
+    return { role: "doctor", userCtx };
+  }
+
+  if (userCtx.role === "admin") {
+    if (requireDoctorOnly) {
+      logRequest(req, 403, { reason: "admin_fact_edit_forbidden" });
+      ERR.ADMIN_CANNOT_EDIT_CLINICAL_FACTS(res, "Clinical facts represent clinical content and may only be edited by authorized doctors");
+      return null;
+    }
+
+    if (!allowAdmin) {
+      logRequest(req, 403, { reason: "admin_disallowed" });
+      ERR.CLINICAL_ACCESS_DENIED(res, "Administrators are not permitted to perform this clinical action");
+      return null;
+    }
+
+    const adminReason = req.headers["x-admin-access-reason"];
+    if (!adminReason || typeof adminReason !== "string" || adminReason.trim().length < 5 || adminReason.trim().length > 500) {
+      logRequest(req, 400, { reason: "admin_reason_missing_or_invalid" });
+      ERR.ADMIN_ACCESS_REASON_REQUIRED(res, "Valid X-Admin-Access-Reason header (5-500 characters) is required for admin access");
+      return null;
+    }
+
+    return { role: "admin", userCtx, adminReason: adminReason.trim() };
+  }
+
+  logRequest(req, 403, { reason: "unauthorized_role", role: userCtx.role });
+  ERR.CLINICAL_ACCESS_DENIED(res, "User role is not authorized for clinical document operations");
+  return null;
+}
+
+// POST /api/documents/:id/extract — Fact Extraction (Idempotent for current derivativeVersion)
+app.post("/api/documents/:id/extract", async (req, res) => {
+  const doc = await prisma.document.findUnique({
+    where: { documentId: req.params.id }
+  });
+  if (!doc) {
+    return ERR.DOCUMENT_NOT_FOUND(res, `Document ${req.params.id} not found`);
+  }
+
+  const auth = await authorizeClinicianForDocument(req, res, doc, { allowAdmin: true, requireDoctorOnly: false });
+  if (!auth) return;
+
+  // Lifecycle guards
+  if (doc.status === "uploaded" || doc.status === "processing") {
+    logRequest(req, 409, { status: doc.status, reason: "document_still_processing" });
+    return ERR.INVALID_DOCUMENT_STATUS(res, `Document is currently '${doc.status}'. Processing must complete before clinical fact extraction.`);
+  }
+  if (doc.status === "failed") {
+    logRequest(req, 409, { status: doc.status, reason: "document_processing_failed" });
+    return ERR.INVALID_DOCUMENT_STATUS(res, "Document processing failed. Cannot extract facts from failed document.");
+  }
+  if (doc.status === "approved") {
+    logRequest(req, 409, { status: doc.status, reason: "document_already_approved" });
+    return ERR.INVALID_DOCUMENT_STATUS(res, "Document is currently approved. A new derivative version must be created before re-extracting facts.");
+  }
+
+  // Idempotency check: check if facts already exist for (documentId, derivativeVersion)
+  const existingFacts = await prisma.documentClinicalFact.findMany({
+    where: {
+      documentId: doc.documentId,
+      version: doc.derivativeVersion
+    },
+    orderBy: { id: "asc" }
+  });
+
+  if (existingFacts.length > 0) {
+    logRequest(req, 200, { documentId: doc.documentId, version: doc.derivativeVersion, alreadyExtracted: true, count: existingFacts.length });
+    return res.json({
+      success: true,
+      alreadyExtracted: true,
+      documentId: doc.documentId,
+      version: doc.derivativeVersion,
+      count: existingFacts.length,
+      facts: existingFacts.map(sanitizeFact)
+    });
+  }
+
+  // Read current-version pages
+  const pages = await prisma.documentPage.findMany({
+    where: {
+      documentId: doc.documentId,
+      version: doc.derivativeVersion
+    },
+    orderBy: { pageNumber: "asc" }
+  });
+
+  if (pages.length === 0) {
+    logRequest(req, 409, { reason: "no_pages_found" });
+    return ERR.INVALID_DOCUMENT_STATUS(res, "No processed pages found for the current document version.");
+  }
+
+  // Perform structured extraction
+  const extractedFacts = clinicalFactExtractor.extractFromDocumentPages(doc, pages);
+
+  const createdFacts = await prisma.$transaction(async (tx) => {
+    const records = [];
+    for (const f of extractedFacts) {
+      const created = await tx.documentClinicalFact.create({
+        data: {
+          documentId: f.documentId,
+          patientUid: f.patientUid,
+          pageNumber: f.pageNumber,
+          factType: f.factType,
+          factKey: f.factKey,
+          factValue: f.factValue,
+          unit: f.unit || null,
+          clinicalDate: f.clinicalDate || null,
+          confidence: f.confidence,
+          provenance: f.provenance,
+          version: doc.derivativeVersion,
+          parentFactId: null
+        }
+      });
+      records.push(created);
+    }
+
+    // Set document status = pending_review
+    await tx.document.update({
+      where: { documentId: doc.documentId },
+      data: { status: "pending_review" }
+    });
+
+    // Write audit log
+    await createAuditLog(tx, {
+      actorType: "USER",
+      actorUserId: auth.userCtx.id,
+      action: "EXTRACT_CLINICAL_FACTS",
+      patientUid: doc.patientUid,
+      resourceType: "Document",
+      resourceId: doc.documentId,
+      metadata: {
+        documentId: doc.documentId,
+        version: doc.derivativeVersion,
+        factsCount: records.length,
+        adminReason: auth.adminReason || undefined
+      }
+    });
+
+    return records;
+  });
+
+  logRequest(req, 201, { documentId: doc.documentId, version: doc.derivativeVersion, count: createdFacts.length });
+  return res.status(201).json({
+    success: true,
+    alreadyExtracted: false,
+    documentId: doc.documentId,
+    version: doc.derivativeVersion,
+    count: createdFacts.length,
+    facts: createdFacts.map(sanitizeFact)
+  });
+});
+
+// GET /api/documents/:id/facts — Fetch Facts for Version
+app.get("/api/documents/:id/facts", async (req, res) => {
+  const doc = await prisma.document.findUnique({
+    where: { documentId: req.params.id }
+  });
+  if (!doc) {
+    return ERR.DOCUMENT_NOT_FOUND(res, `Document ${req.params.id} not found`);
+  }
+
+  const auth = await authorizeClinicianForDocument(req, res, doc, { allowAdmin: true, requireDoctorOnly: false });
+  if (!auth) return;
+
+  const targetVersion = req.query.version !== undefined
+    ? parseInt(req.query.version, 10)
+    : doc.derivativeVersion;
+
+  if (isNaN(targetVersion) || targetVersion < 1) {
+    return ERR.VALIDATION_ERROR(res, "version parameter must be a positive integer");
+  }
+
+  const facts = await prisma.documentClinicalFact.findMany({
+    where: {
+      documentId: doc.documentId,
+      version: targetVersion
+    },
+    orderBy: { id: "asc" }
+  });
+
+  logRequest(req, 200, { documentId: doc.documentId, version: targetVersion, count: facts.length });
+  return res.json({
+    success: true,
+    documentId: doc.documentId,
+    version: targetVersion,
+    facts: facts.map(sanitizeFact)
+  });
+});
+
+// GET /api/documents/:id/review — Complete Clinician Review Bundle
+app.get("/api/documents/:id/review", async (req, res) => {
+  const doc = await prisma.document.findUnique({
+    where: { documentId: req.params.id }
+  });
+  if (!doc) {
+    return ERR.DOCUMENT_NOT_FOUND(res, `Document ${req.params.id} not found`);
+  }
+
+  const auth = await authorizeClinicianForDocument(req, res, doc, { allowAdmin: true, requireDoctorOnly: false });
+  if (!auth) return;
+
+  const [pages, facts, approvals] = await Promise.all([
+    prisma.documentPage.findMany({
+      where: {
+        documentId: doc.documentId,
+        version: doc.derivativeVersion
+      },
+      orderBy: { pageNumber: "asc" }
+    }),
+    prisma.documentClinicalFact.findMany({
+      where: {
+        documentId: doc.documentId,
+        version: doc.derivativeVersion
+      },
+      orderBy: { id: "asc" }
+    }),
+    prisma.documentApproval.findMany({
+      where: { documentId: doc.documentId },
+      orderBy: { approvedAt: "desc" }
+    })
+  ]);
+
+  const latestApproval = approvals.length > 0 ? approvals[0] : null;
+  const matchingApproval = approvals.find(a => a.approvedVersion === doc.derivativeVersion) || null;
+  const ragEligible = isDocumentRAGEligible(doc, matchingApproval);
+
+  logRequest(req, 200, { documentId: doc.documentId, version: doc.derivativeVersion, isRAGEligible: ragEligible });
+  return res.json({
+    success: true,
+    document: {
+      documentId: doc.documentId,
+      fileName: doc.fileName,
+      mimeType: doc.mimeType,
+      status: doc.status,
+      totalPages: doc.totalPages,
+      derivativeVersion: doc.derivativeVersion,
+      uploadDate: doc.uploadDate,
+      clinicalDate: doc.clinicalDate
+    },
+    currentVersion: doc.derivativeVersion,
+    status: doc.status,
+    pages: pages.map(p => ({
+      pageNumber: p.pageNumber,
+      extractedText: p.extractedText,
+      ocrStatus: p.ocrStatus,
+      ocrConfidence: p.ocrConfidence
+    })),
+    facts: facts.map(sanitizeFact),
+    approvals: approvals.map(a => ({
+      id: a.id,
+      documentId: a.documentId,
+      approvedByUserId: a.approvedByUserId,
+      approvedVersion: a.approvedVersion,
+      action: a.action,
+      comments: a.comments,
+      approvedAt: a.approvedAt
+    })),
+    latestApproval: matchingApproval ? {
+      id: matchingApproval.id,
+      documentId: matchingApproval.documentId,
+      approvedByUserId: matchingApproval.approvedByUserId,
+      approvedVersion: matchingApproval.approvedVersion,
+      action: matchingApproval.action,
+      comments: matchingApproval.comments,
+      approvedAt: matchingApproval.approvedAt
+    } : null,
+    isRAGEligible: ragEligible
+  });
+});
+
+// PUT /api/documents/:id/pages/:pageNumber — Edit Page Text (Atomic Snapshot)
+app.put("/api/documents/:id/pages/:pageNumber", async (req, res) => {
+  const targetPageNumber = parseInt(req.params.pageNumber, 10);
+  if (isNaN(targetPageNumber) || targetPageNumber < 1) {
+    return ERR.VALIDATION_ERROR(res, "pageNumber must be a positive integer");
+  }
+
+  const { expectedVersion, extractedText } = req.body || {};
+  if (expectedVersion === undefined || isNaN(parseInt(expectedVersion, 10)) || parseInt(expectedVersion, 10) < 1) {
+    return ERR.VALIDATION_ERROR(res, "expectedVersion is required and must be a positive integer");
+  }
+  if (typeof extractedText !== "string") {
+    return ERR.VALIDATION_ERROR(res, "extractedText string is required in request body");
+  }
+
+  const doc = await prisma.document.findUnique({
+    where: { documentId: req.params.id }
+  });
+  if (!doc) {
+    return ERR.DOCUMENT_NOT_FOUND(res, `Document ${req.params.id} not found`);
+  }
+
+  const auth = await authorizeClinicianForDocument(req, res, doc, { allowAdmin: true, requireDoctorOnly: false });
+  if (!auth) return;
+
+  try {
+    const result = await prisma.$transaction(async (tx) => {
+      // 1. Fetch current document
+      const currentDoc = await tx.document.findUnique({
+        where: { documentId: doc.documentId }
+      });
+      if (!currentDoc) {
+        const err = new Error("Document not found");
+        err.code = "DOCUMENT_NOT_FOUND";
+        throw err;
+      }
+
+      // 2. Optimistic concurrency check
+      if (currentDoc.derivativeVersion !== parseInt(expectedVersion, 10)) {
+        const err = new Error(`VERSION_CONFLICT: expected version ${expectedVersion} but current version is ${currentDoc.derivativeVersion}`);
+        err.code = "VERSION_CONFLICT";
+        err.currentVersion = currentDoc.derivativeVersion;
+        throw err;
+      }
+
+      // 3. Read ALL current pages
+      const currentPages = await tx.documentPage.findMany({
+        where: { documentId: currentDoc.documentId, version: currentDoc.derivativeVersion },
+        orderBy: { pageNumber: "asc" }
+      });
+
+      const targetPage = currentPages.find(p => p.pageNumber === targetPageNumber);
+      if (!targetPage) {
+        const err = new Error(`Page ${targetPageNumber} not found in document`);
+        err.code = "PAGE_NOT_FOUND";
+        throw err;
+      }
+
+      // 4. Read ALL current facts
+      const currentFacts = await tx.documentClinicalFact.findMany({
+        where: { documentId: currentDoc.documentId, version: currentDoc.derivativeVersion }
+      });
+
+      const newVersion = currentDoc.derivativeVersion + 1;
+
+      // 5. Clone ALL pages into newVersion (preserving page numbering)
+      for (const page of currentPages) {
+        const isTarget = page.pageNumber === targetPageNumber;
+        await tx.documentPage.create({
+          data: {
+            documentId: currentDoc.documentId,
+            pageNumber: page.pageNumber,
+            version: newVersion,
+            extractedText: isTarget ? extractedText : page.extractedText,
+            ocrStatus: isTarget ? "native_text" : page.ocrStatus,
+            ocrConfidence: isTarget ? 1.0 : page.ocrConfidence
+          }
+        });
+      }
+
+      // 6. Clone ALL current facts into newVersion (preserving historical source provenance)
+      for (const fact of currentFacts) {
+        await tx.documentClinicalFact.create({
+          data: {
+            documentId: fact.documentId,
+            patientUid: fact.patientUid,
+            pageNumber: fact.pageNumber,
+            factType: fact.factType,
+            factKey: fact.factKey,
+            factValue: fact.factValue,
+            unit: fact.unit,
+            clinicalDate: fact.clinicalDate,
+            confidence: fact.confidence,
+            provenance: fact.provenance,
+            version: newVersion,
+            parentFactId: fact.id
+          }
+        });
+      }
+
+      // 7. Increment Document.derivativeVersion & reset status = pending_review
+      const updatedDoc = await tx.document.update({
+        where: { documentId: currentDoc.documentId },
+        data: {
+          derivativeVersion: newVersion,
+          status: "pending_review"
+        }
+      });
+
+      // 8. Audit logs
+      await createAuditLog(tx, {
+        actorType: "USER",
+        actorUserId: auth.userCtx.id,
+        action: "EDIT_DOCUMENT_PAGE",
+        patientUid: currentDoc.patientUid,
+        resourceType: "Document",
+        resourceId: currentDoc.documentId,
+        metadata: {
+          documentId: currentDoc.documentId,
+          pageNumber: targetPageNumber,
+          priorVersion: currentDoc.derivativeVersion,
+          newVersion,
+          adminReason: auth.adminReason || undefined
+        }
+      });
+
+      await createAuditLog(tx, {
+        actorType: "SYSTEM",
+        action: "INVALIDATE_DOCUMENT_APPROVAL",
+        patientUid: currentDoc.patientUid,
+        resourceType: "Document",
+        resourceId: currentDoc.documentId,
+        metadata: {
+          documentId: currentDoc.documentId,
+          invalidatedVersion: currentDoc.derivativeVersion,
+          newVersion,
+          trigger: "page_edit"
+        }
+      });
+
+      return { newVersion, status: updatedDoc.status };
+    });
+
+    logRequest(req, 200, { documentId: doc.documentId, newVersion: result.newVersion });
+    return res.json({
+      success: true,
+      documentId: doc.documentId,
+      newVersion: result.newVersion,
+      status: result.status
+    });
+  } catch (err) {
+    if (err.code === "VERSION_CONFLICT") {
+      logRequest(req, 409, { versionConflict: true, currentVersion: err.currentVersion });
+      return ERR.VERSION_CONFLICT(res, err.message, { currentVersion: err.currentVersion });
+    }
+    if (err.code === "PAGE_NOT_FOUND") {
+      return ERR.VALIDATION_ERROR(res, err.message);
+    }
+    logError(req, "PAGE_EDIT_ERROR", err.message, err);
+    return res.status(500).json({
+      error: {
+        code: "INTERNAL_ERROR",
+        message: err.message || "Failed to edit document page",
+        requestId: req.requestId
+      }
+    });
+  }
+});
+
+// PUT /api/documents/:id/facts/:factId — Edit Clinical Fact (Doctor Only, DOCTOR_ENTERED)
+app.put("/api/documents/:id/facts/:factId", async (req, res) => {
+  const targetFactId = parseInt(req.params.factId, 10);
+  if (isNaN(targetFactId) || targetFactId < 1) {
+    return ERR.VALIDATION_ERROR(res, "factId must be a positive integer");
+  }
+
+  const { expectedVersion, factKey, factValue, unit, clinicalDate, factType } = req.body || {};
+  if (expectedVersion === undefined || isNaN(parseInt(expectedVersion, 10)) || parseInt(expectedVersion, 10) < 1) {
+    return ERR.VALIDATION_ERROR(res, "expectedVersion is required and must be a positive integer");
+  }
+
+  const doc = await prisma.document.findUnique({
+    where: { documentId: req.params.id }
+  });
+  if (!doc) {
+    return ERR.DOCUMENT_NOT_FOUND(res, `Document ${req.params.id} not found`);
+  }
+
+  // Doctor Only authorization: Admin denied
+  const auth = await authorizeClinicianForDocument(req, res, doc, { allowAdmin: false, requireDoctorOnly: true });
+  if (!auth) return;
+
+  try {
+    const result = await prisma.$transaction(async (tx) => {
+      // 1. Fetch current document
+      const currentDoc = await tx.document.findUnique({
+        where: { documentId: doc.documentId }
+      });
+      if (!currentDoc) {
+        const err = new Error("Document not found");
+        err.code = "DOCUMENT_NOT_FOUND";
+        throw err;
+      }
+
+      // 2. Concurrency verification
+      if (currentDoc.derivativeVersion !== parseInt(expectedVersion, 10)) {
+        const err = new Error(`VERSION_CONFLICT: expected version ${expectedVersion} but current version is ${currentDoc.derivativeVersion}`);
+        err.code = "VERSION_CONFLICT";
+        err.currentVersion = currentDoc.derivativeVersion;
+        throw err;
+      }
+
+      // 3. Find target fact
+      const targetFact = await tx.documentClinicalFact.findUnique({
+        where: { id: targetFactId }
+      });
+      if (!targetFact || targetFact.documentId !== currentDoc.documentId || targetFact.version !== currentDoc.derivativeVersion) {
+        const err = new Error("Fact not found on current document version");
+        err.code = "FACT_NOT_FOUND";
+        throw err;
+      }
+
+      // 4. Read ALL current pages & facts
+      const currentPages = await tx.documentPage.findMany({
+        where: { documentId: currentDoc.documentId, version: currentDoc.derivativeVersion },
+        orderBy: { pageNumber: "asc" }
+      });
+      const currentFacts = await tx.documentClinicalFact.findMany({
+        where: { documentId: currentDoc.documentId, version: currentDoc.derivativeVersion }
+      });
+
+      const newVersion = currentDoc.derivativeVersion + 1;
+
+      // 5. Clone ALL pages into newVersion (exact copies)
+      for (const page of currentPages) {
+        await tx.documentPage.create({
+          data: {
+            documentId: currentDoc.documentId,
+            pageNumber: page.pageNumber,
+            version: newVersion,
+            extractedText: page.extractedText,
+            ocrStatus: page.ocrStatus,
+            ocrConfidence: page.ocrConfidence
+          }
+        });
+      }
+
+      // 6. Clone ALL facts into newVersion, applying DOCTOR_ENTERED edit to targetFact
+      let updatedFactRecord = null;
+      for (const fact of currentFacts) {
+        if (fact.id === targetFact.id) {
+          const updatedKey = factKey !== undefined ? String(factKey).trim() : fact.factKey;
+          const updatedVal = factValue !== undefined ? String(factValue).trim() : fact.factValue;
+          const updatedUnit = unit !== undefined ? (unit ? String(unit).trim() : null) : fact.unit;
+          const updatedType = factType !== undefined ? String(factType).trim() : fact.factType;
+          let updatedDate = fact.clinicalDate;
+          if (clinicalDate !== undefined) {
+            updatedDate = clinicalDate ? new Date(clinicalDate) : null;
+          }
+
+          updatedFactRecord = await tx.documentClinicalFact.create({
+            data: {
+              documentId: fact.documentId,
+              patientUid: fact.patientUid,
+              pageNumber: fact.pageNumber,
+              factType: updatedType,
+              factKey: updatedKey,
+              factValue: updatedVal,
+              unit: updatedUnit,
+              clinicalDate: updatedDate,
+              confidence: 1.0,
+              provenance: "DOCTOR_ENTERED",
+              version: newVersion,
+              parentFactId: targetFact.id
+            }
+          });
+        } else {
+          await tx.documentClinicalFact.create({
+            data: {
+              documentId: fact.documentId,
+              patientUid: fact.patientUid,
+              pageNumber: fact.pageNumber,
+              factType: fact.factType,
+              factKey: fact.factKey,
+              factValue: fact.factValue,
+              unit: fact.unit,
+              clinicalDate: fact.clinicalDate,
+              confidence: fact.confidence,
+              provenance: fact.provenance,
+              version: newVersion,
+              parentFactId: fact.id
+            }
+          });
+        }
+      }
+
+      // 7. Update Document status = pending_review and increment version
+      const updatedDoc = await tx.document.update({
+        where: { documentId: currentDoc.documentId },
+        data: {
+          derivativeVersion: newVersion,
+          status: "pending_review"
+        }
+      });
+
+      // 8. Audit logs
+      await createAuditLog(tx, {
+        actorType: "USER",
+        actorUserId: auth.userCtx.id,
+        action: "EDIT_CLINICAL_FACT",
+        patientUid: currentDoc.patientUid,
+        resourceType: "DocumentClinicalFact",
+        resourceId: String(updatedFactRecord.id),
+        metadata: {
+          documentId: currentDoc.documentId,
+          parentFactId: targetFact.id,
+          newFactId: updatedFactRecord.id,
+          priorVersion: currentDoc.derivativeVersion,
+          newVersion,
+          factType: updatedFactRecord.factType,
+          factKey: updatedFactRecord.factKey
+        }
+      });
+
+      await createAuditLog(tx, {
+        actorType: "SYSTEM",
+        action: "INVALIDATE_DOCUMENT_APPROVAL",
+        patientUid: currentDoc.patientUid,
+        resourceType: "Document",
+        resourceId: currentDoc.documentId,
+        metadata: {
+          documentId: currentDoc.documentId,
+          invalidatedVersion: currentDoc.derivativeVersion,
+          newVersion,
+          trigger: "fact_edit"
+        }
+      });
+
+      return { newVersion, status: updatedDoc.status, updatedFact: updatedFactRecord };
+    });
+
+    logRequest(req, 200, { documentId: doc.documentId, newVersion: result.newVersion });
+    return res.json({
+      success: true,
+      documentId: doc.documentId,
+      newVersion: result.newVersion,
+      status: result.status,
+      fact: sanitizeFact(result.updatedFact)
+    });
+  } catch (err) {
+    if (err.code === "VERSION_CONFLICT") {
+      logRequest(req, 409, { versionConflict: true, currentVersion: err.currentVersion });
+      return ERR.VERSION_CONFLICT(res, err.message, { currentVersion: err.currentVersion });
+    }
+    if (err.code === "FACT_NOT_FOUND") {
+      return ERR.FACT_NOT_FOUND(res, err.message);
+    }
+    logError(req, "FACT_EDIT_ERROR", err.message, err);
+    return res.status(500).json({
+      error: {
+        code: "INTERNAL_ERROR",
+        message: err.message || "Failed to edit clinical fact",
+        requestId: req.requestId
+      }
+    });
+  }
+});
+
+// DELETE /api/documents/:id/facts/:factId — Fact Removal / Void (Creates Next Complete Snapshot Without Fact)
+app.delete("/api/documents/:id/facts/:factId", async (req, res) => {
+  const targetFactId = parseInt(req.params.factId, 10);
+  if (isNaN(targetFactId) || targetFactId < 1) {
+    return ERR.VALIDATION_ERROR(res, "factId must be a positive integer");
+  }
+
+  const rawVersion = req.body?.expectedVersion !== undefined ? req.body.expectedVersion : req.query?.expectedVersion;
+  if (rawVersion === undefined || isNaN(parseInt(rawVersion, 10)) || parseInt(rawVersion, 10) < 1) {
+    return ERR.VALIDATION_ERROR(res, "expectedVersion is required and must be a positive integer");
+  }
+  const expectedVersion = parseInt(rawVersion, 10);
+
+  const doc = await prisma.document.findUnique({
+    where: { documentId: req.params.id }
+  });
+  if (!doc) {
+    return ERR.DOCUMENT_NOT_FOUND(res, `Document ${req.params.id} not found`);
+  }
+
+  // Doctor Only authorization: Admin denied
+  const auth = await authorizeClinicianForDocument(req, res, doc, { allowAdmin: false, requireDoctorOnly: true });
+  if (!auth) return;
+
+  try {
+    const result = await prisma.$transaction(async (tx) => {
+      // 1. Fetch current document
+      const currentDoc = await tx.document.findUnique({
+        where: { documentId: doc.documentId }
+      });
+      if (!currentDoc) {
+        const err = new Error("Document not found");
+        err.code = "DOCUMENT_NOT_FOUND";
+        throw err;
+      }
+
+      // 2. Concurrency verification
+      if (currentDoc.derivativeVersion !== expectedVersion) {
+        const err = new Error(`VERSION_CONFLICT: expected version ${expectedVersion} but current version is ${currentDoc.derivativeVersion}`);
+        err.code = "VERSION_CONFLICT";
+        err.currentVersion = currentDoc.derivativeVersion;
+        throw err;
+      }
+
+      // 3. Find target fact
+      const targetFact = await tx.documentClinicalFact.findUnique({
+        where: { id: targetFactId }
+      });
+      if (!targetFact || targetFact.documentId !== currentDoc.documentId || targetFact.version !== currentDoc.derivativeVersion) {
+        const err = new Error("Fact not found on current document version");
+        err.code = "FACT_NOT_FOUND";
+        throw err;
+      }
+
+      // 4. Read ALL current pages & facts
+      const currentPages = await tx.documentPage.findMany({
+        where: { documentId: currentDoc.documentId, version: currentDoc.derivativeVersion },
+        orderBy: { pageNumber: "asc" }
+      });
+      const currentFacts = await tx.documentClinicalFact.findMany({
+        where: { documentId: currentDoc.documentId, version: currentDoc.derivativeVersion }
+      });
+
+      const newVersion = currentDoc.derivativeVersion + 1;
+
+      // 5. Clone ALL pages into newVersion
+      for (const page of currentPages) {
+        await tx.documentPage.create({
+          data: {
+            documentId: currentDoc.documentId,
+            pageNumber: page.pageNumber,
+            version: newVersion,
+            extractedText: page.extractedText,
+            ocrStatus: page.ocrStatus,
+            ocrConfidence: page.ocrConfidence
+          }
+        });
+      }
+
+      // 6. Clone ALL current facts into newVersion OMITTING targetFact
+      for (const fact of currentFacts) {
+        if (fact.id === targetFact.id) {
+          continue; // Omit from active current snapshot; historical record remains immutable
+        }
+        await tx.documentClinicalFact.create({
+          data: {
+            documentId: fact.documentId,
+            patientUid: fact.patientUid,
+            pageNumber: fact.pageNumber,
+            factType: fact.factType,
+            factKey: fact.factKey,
+            factValue: fact.factValue,
+            unit: fact.unit,
+            clinicalDate: fact.clinicalDate,
+            confidence: fact.confidence,
+            provenance: fact.provenance,
+            version: newVersion,
+            parentFactId: fact.id
+          }
+        });
+      }
+
+      // 7. Update Document
+      const updatedDoc = await tx.document.update({
+        where: { documentId: currentDoc.documentId },
+        data: {
+          derivativeVersion: newVersion,
+          status: "pending_review"
+        }
+      });
+
+      // 8. Audit logs
+      await createAuditLog(tx, {
+        actorType: "USER",
+        actorUserId: auth.userCtx.id,
+        action: "REMOVE_CLINICAL_FACT",
+        patientUid: currentDoc.patientUid,
+        resourceType: "DocumentClinicalFact",
+        resourceId: String(targetFact.id),
+        metadata: {
+          documentId: currentDoc.documentId,
+          removedFactId: targetFact.id,
+          priorVersion: currentDoc.derivativeVersion,
+          newVersion,
+          factType: targetFact.factType,
+          factKey: targetFact.factKey
+        }
+      });
+
+      await createAuditLog(tx, {
+        actorType: "SYSTEM",
+        action: "INVALIDATE_DOCUMENT_APPROVAL",
+        patientUid: currentDoc.patientUid,
+        resourceType: "Document",
+        resourceId: currentDoc.documentId,
+        metadata: {
+          documentId: currentDoc.documentId,
+          invalidatedVersion: currentDoc.derivativeVersion,
+          newVersion,
+          trigger: "fact_removal"
+        }
+      });
+
+      return { newVersion, status: updatedDoc.status };
+    });
+
+    logRequest(req, 200, { documentId: doc.documentId, newVersion: result.newVersion, removedFactId: targetFactId });
+    return res.json({
+      success: true,
+      documentId: doc.documentId,
+      newVersion: result.newVersion,
+      status: result.status,
+      removedFactId: targetFactId
+    });
+  } catch (err) {
+    if (err.code === "VERSION_CONFLICT") {
+      logRequest(req, 409, { versionConflict: true, currentVersion: err.currentVersion });
+      return ERR.VERSION_CONFLICT(res, err.message, { currentVersion: err.currentVersion });
+    }
+    if (err.code === "FACT_NOT_FOUND") {
+      return ERR.FACT_NOT_FOUND(res, err.message);
+    }
+    logError(req, "FACT_REMOVAL_ERROR", err.message, err);
+    return res.status(500).json({
+      error: {
+        code: "INTERNAL_ERROR",
+        message: err.message || "Failed to remove clinical fact",
+        requestId: req.requestId
+      }
+    });
+  }
+});
+
+// PUT /api/documents/:id/approve — Doctor Approval Gate (Exact Version Binding)
+app.put("/api/documents/:id/approve", async (req, res) => {
+  const { expectedVersion, action, comments } = req.body || {};
+  if (expectedVersion === undefined || isNaN(parseInt(expectedVersion, 10)) || parseInt(expectedVersion, 10) < 1) {
+    return ERR.VALIDATION_ERROR(res, "expectedVersion is required and must be a positive integer");
+  }
+
+  const validActions = ["APPROVED", "REJECTED", "REQUIRES_RESCAN"];
+  if (!action || !validActions.includes(action)) {
+    return ERR.VALIDATION_ERROR(res, `action must be one of: ${validActions.join(", ")}`);
+  }
+
+  const doc = await prisma.document.findUnique({
+    where: { documentId: req.params.id }
+  });
+  if (!doc) {
+    return ERR.DOCUMENT_NOT_FOUND(res, `Document ${req.params.id} not found`);
+  }
+
+  const auth = await authorizeClinicianForDocument(req, res, doc, { allowAdmin: true, requireDoctorOnly: false });
+  if (!auth) return;
+
+  // Admin Governance: Admins may NOT clinically approve documents
+  if (auth.role === "admin" && action === "APPROVED") {
+    logRequest(req, 403, { reason: "admin_cannot_approve" });
+    return ERR.CLINICAL_APPROVAL_REQUIRES_DOCTOR(res, "Clinical approval requires an authorized doctor session. Administrators may only reject or require rescan.");
+  }
+
+  try {
+    const result = await prisma.$transaction(async (tx) => {
+      // 1. Fetch current document
+      const currentDoc = await tx.document.findUnique({
+        where: { documentId: doc.documentId }
+      });
+      if (!currentDoc) {
+        const err = new Error("Document not found");
+        err.code = "DOCUMENT_NOT_FOUND";
+        throw err;
+      }
+
+      // 2. Concurrency check
+      if (currentDoc.derivativeVersion !== parseInt(expectedVersion, 10)) {
+        const err = new Error(`VERSION_CONFLICT: expected version ${expectedVersion} but current version is ${currentDoc.derivativeVersion}`);
+        err.code = "VERSION_CONFLICT";
+        err.currentVersion = currentDoc.derivativeVersion;
+        throw err;
+      }
+
+      // 3. Status check: must be pending_review
+      if (currentDoc.status !== "pending_review") {
+        const err = new Error(`Document status must be 'pending_review' to be approved or rejected. Current status is '${currentDoc.status}'.`);
+        err.code = "INVALID_DOCUMENT_STATUS";
+        throw err;
+      }
+
+      // 4. Map action to status
+      let newStatus = "pending_review";
+      let auditAction = "APPROVE_DOCUMENT";
+      if (action === "APPROVED") {
+        newStatus = "approved";
+        auditAction = "APPROVE_DOCUMENT";
+      } else if (action === "REJECTED") {
+        newStatus = "rejected";
+        auditAction = "REJECT_DOCUMENT";
+      } else if (action === "REQUIRES_RESCAN") {
+        newStatus = "requires_rescan";
+        auditAction = "REQUIRE_RESCAN_DOCUMENT";
+      }
+
+      // 5. Create DocumentApproval record tied to exact version
+      const approval = await tx.documentApproval.create({
+        data: {
+          documentId: currentDoc.documentId,
+          approvedByUserId: auth.userCtx.id,
+          approvedVersion: parseInt(expectedVersion, 10),
+          action,
+          comments: comments ? String(comments).trim() : null,
+          approvedAt: new Date()
+        }
+      });
+
+      // 6. Update Document status
+      const updatedDoc = await tx.document.update({
+        where: { documentId: currentDoc.documentId },
+        data: { status: newStatus }
+      });
+
+      // 7. Audit log
+      await createAuditLog(tx, {
+        actorType: "USER",
+        actorUserId: auth.userCtx.id,
+        action: auditAction,
+        patientUid: currentDoc.patientUid,
+        resourceType: "DocumentApproval",
+        resourceId: String(approval.id),
+        metadata: {
+          documentId: currentDoc.documentId,
+          approvedVersion: parseInt(expectedVersion, 10),
+          action,
+          newStatus,
+          comments: comments ? String(comments).trim() : undefined,
+          adminReason: auth.adminReason || undefined
+        }
+      });
+
+      return { updatedDoc, approval };
+    });
+
+    logRequest(req, 200, { documentId: doc.documentId, status: result.updatedDoc.status, approvedVersion: expectedVersion, action });
+    return res.json({
+      success: true,
+      documentId: doc.documentId,
+      status: result.updatedDoc.status,
+      approvedVersion: parseInt(expectedVersion, 10),
+      action,
+      approvalId: result.approval.id
+    });
+  } catch (err) {
+    if (err.code === "VERSION_CONFLICT") {
+      logRequest(req, 409, { versionConflict: true, currentVersion: err.currentVersion });
+      return ERR.VERSION_CONFLICT(res, err.message, { currentVersion: err.currentVersion });
+    }
+    if (err.code === "INVALID_DOCUMENT_STATUS") {
+      logRequest(req, 409, { invalidStatus: true });
+      return ERR.INVALID_DOCUMENT_STATUS(res, err.message);
+    }
+    logError(req, "DOCUMENT_APPROVAL_ERROR", err.message, err);
+    return res.status(500).json({
+      error: {
+        code: "INTERNAL_ERROR",
+        message: err.message || "Failed to approve document",
+        requestId: req.requestId
+      }
+    });
+  }
+});
+
+// --------------------------------------------------------------------------
 // 17. RAG Service Boundary — Phase 3 Stub (Scheduled for Phase 5)
 // --------------------------------------------------------------------------
 app.post("/api/rag/query", (req, res) => {
@@ -2471,5 +3493,5 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   });
 }
 
-export { ocrWorker, documentIngestionService };
+export { ocrWorker, documentIngestionService, clinicalFactExtractor };
 export default app;
