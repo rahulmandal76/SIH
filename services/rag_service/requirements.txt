@@ -1,0 +1,26 @@
+# MedSync RAG Service — Python Dependencies
+# Phase 5E: FastAPI Longitudinal RAG Service
+
+# ── HTTP Framework ─────────────────────────────────────────────────────────────
+fastapi==0.115.12
+uvicorn[standard]==0.34.3
+pydantic>=2.12.5,<3.0.0
+
+# ── ML / Embeddings ────────────────────────────────────────────────────────────
+sentence-transformers==3.4.1
+faiss-cpu==1.10.0
+numpy>=1.24,<3.0
+
+# ── LLM API ────────────────────────────────────────────────────────────────────
+requests>=2.28,<3.0
+python-dotenv>=1.0,<2.0
+
+# ── Concurrency / Locking ─────────────────────────────────────────────────────
+filelock>=3.12,<4.0
+
+# ── Document Parsing ───────────────────────────────────────────────────────────
+pypdf>=4.0,<6.0
+pillow>=10.0,<12.0
+
+# ── OCR ────────────────────────────────────────────────────────────────────────
+pytesseract>=0.3.10

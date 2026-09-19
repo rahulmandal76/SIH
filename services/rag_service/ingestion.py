@@ -18,17 +18,17 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from services.rag_service.chunker import ClinicalChunk, chunk_document_bundle
+from services.rag_service.database import get_default_sqlite_path, parse_database_config
 from services.rag_service.vectorstore import PatientVectorStore, validate_patient_uid
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_DB_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "prisma", "dev.db"))
-
 
 def get_db_connection(db_path: Optional[str] = None) -> sqlite3.Connection:
-    """Open SQLite connection with row factory enabled."""
-    target_path = db_path or DEFAULT_DB_PATH
-    if not os.path.isfile(target_path):
+    """Open SQLite connection with row factory enabled using environment-driven config."""
+    cfg = parse_database_config(url_override=db_path)
+    target_path = cfg.get("sqlite_path") or get_default_sqlite_path()
+    if not target_path or not os.path.isfile(target_path):
         raise FileNotFoundError(f"Database file not found at: {target_path}")
     con = sqlite3.connect(target_path)
     con.row_factory = sqlite3.Row
