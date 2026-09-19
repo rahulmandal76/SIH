@@ -72,6 +72,7 @@ import {
 import { evaluateAbhaStatus, validateAbhaInvariant } from "./server/abdmAdapter.js";
 import { csrfProtection } from "./server/csrf.js";
 import { createAuditLog } from "./server/audit.js";
+import { InterviewPlanner } from "./server/interviewPlanner.js";
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -226,6 +227,8 @@ const ERR = {
   TOO_MANY_REQUESTS:           (res, msg)        => errorResponse(res, 429, "TOO_MANY_REQUESTS", msg),
   AI_PROVIDER_RATE_LIMITED:    (res, msg)        => errorResponse(res, 429, "AI_PROVIDER_RATE_LIMITED", msg),
   INTERNAL_ERROR:              (res, msg)        => errorResponse(res, 500, "INTERNAL_ERROR", msg),
+  INVALID_INTERVIEW_STATE:     (res, msg, extra) => errorResponse(res, 400, "INVALID_INTERVIEW_STATE", msg, extra),
+  PLANNER_UNAVAILABLE:         (res, msg)        => errorResponse(res, 503, "PLANNER_UNAVAILABLE", msg),
   AI_PROVIDER_UNAVAILABLE:     (res, msg)        => errorResponse(res, 503, "AI_PROVIDER_UNAVAILABLE", msg),
   AI_PROVIDER_TIMEOUT:         (res, msg)        => errorResponse(res, 504, "AI_PROVIDER_TIMEOUT", msg),
 };
@@ -1698,6 +1701,395 @@ app.post("/api/ai/intake-question", aiRateLimiter, async (req, res) => {
     if (code === "AI_PROVIDER_TIMEOUT") return ERR.AI_PROVIDER_TIMEOUT(res, msg);
     if (code === "AI_PROVIDER_RATE_LIMITED") return ERR.AI_PROVIDER_RATE_LIMITED(res, msg);
     return ERR.AI_PROVIDER_UNAVAILABLE(res, msg);
+  }
+});
+
+// --------------------------------------------------------------------------
+// 15b. Adaptive Clinical Interview State Machine — Phase 5A
+// --------------------------------------------------------------------------
+const interviewPlanner = new InterviewPlanner(prisma);
+
+function getEncounterSessionContext(req) {
+  if (req.encounterSession?.patientUid) {
+    return req.encounterSession;
+  }
+  const token = req.cookies?.ms_encounter_session || req.headers["x-kiosk-session"];
+  if (token) {
+    const check = validateEncounterSession(token);
+    if (check.valid) {
+      return {
+        patientUid: check.session.patientUid,
+        encounterId: check.session.encounterId,
+        role: check.session.role
+      };
+    }
+  }
+  return null;
+}
+
+const IntakeInterviewStartSchema = z.object({
+  chiefComplaint: z.string().max(1000).optional().default(""),
+  language: z.enum(["Hindi", "English"]).optional().default("Hindi")
+});
+
+const IntakeInterviewStepSchema = z.object({
+  sessionId: z.string().min(1).max(100),
+  questionKey: z.string().min(1).max(100),
+  answerText: z.string().max(1000).optional().default(""),
+  action: z.enum(["answer", "skip", "unknown"]).optional().default("answer"),
+  language: z.enum(["Hindi", "English"]).optional().default("Hindi")
+});
+
+const IntakeInterviewEditSchema = z.object({
+  sessionId: z.string().min(1).max(100),
+  turnIndex: z.number().int().min(0).max(50),
+  newAnswerText: z.string().min(1).max(1000)
+});
+
+const IntakeInterviewSubmitSchema = z.object({
+  sessionId: z.string().min(1).max(100)
+});
+
+// POST /api/intake/interview/start
+app.post("/api/intake/interview/start", async (req, res) => {
+  if (req.body && (req.body.patientUid !== undefined || req.body.patientId !== undefined)) {
+    logRequest(req, 400, { securityViolation: "patientUid_in_intake_body" });
+    return ERR.VALIDATION_ERROR(res, "Public intake APIs do not accept patientUid or patientId in request body. Identity is derived server-side from session context.");
+  }
+  if (req.query && (req.query.patientUid !== undefined || req.query.patientId !== undefined)) {
+    logRequest(req, 400, { securityViolation: "patientUid_in_intake_query" });
+    return ERR.VALIDATION_ERROR(res, "Public intake APIs do not accept patientUid or patientId in query parameters. Identity is derived server-side from session context.");
+  }
+
+  const encCtx = getEncounterSessionContext(req);
+  if (!encCtx) {
+    logRequest(req, 401, { reason: "no_encounter_session" });
+    return ERR.AUTHENTICATION_REQUIRED(res, "Active patient encounter session required for intake interview");
+  }
+
+  const parseResult = IntakeInterviewStartSchema.safeParse(req.body || {});
+  if (!parseResult.success) {
+    return ERR.VALIDATION_ERROR(res, "Invalid interview start parameters", { issues: parseResult.error.issues });
+  }
+
+  const { chiefComplaint, language } = parseResult.data;
+
+  try {
+    const result = await interviewPlanner.startSession({
+      patientUid: encCtx.patientUid,
+      encounterId: encCtx.encounterId,
+      chiefComplaint,
+      language
+    });
+
+    logRequest(req, 200, { sessionId: result.sessionId, category: result.category });
+    return res.json({
+      success: true,
+      sessionId: result.sessionId,
+      status: result.status,
+      category: result.category,
+      currentStep: result.currentStep,
+      totalQuestions: result.totalQuestions,
+      coveredDomains: result.coveredDomains,
+      nextQuestion: result.nextQuestion,
+      isComplete: result.isComplete,
+      isExisting: result.isExisting || false
+    });
+  } catch (err) {
+    logError(req, "PLANNER_ERROR", err.message, err);
+    return res.status(500).json({
+      error: {
+        code: "PLANNER_UNAVAILABLE",
+        message: err.message || "Failed to initialize interview session",
+        requestId: req.requestId
+      }
+    });
+  }
+});
+
+// POST /api/intake/interview/step
+app.post("/api/intake/interview/step", async (req, res) => {
+  if (req.body && (req.body.patientUid !== undefined || req.body.patientId !== undefined)) {
+    logRequest(req, 400, { securityViolation: "patientUid_in_intake_body" });
+    return ERR.VALIDATION_ERROR(res, "Public intake APIs do not accept patientUid or patientId in request body. Identity is derived server-side from session context.");
+  }
+  if (req.query && (req.query.patientUid !== undefined || req.query.patientId !== undefined)) {
+    logRequest(req, 400, { securityViolation: "patientUid_in_intake_query" });
+    return ERR.VALIDATION_ERROR(res, "Public intake APIs do not accept patientUid or patientId in query parameters. Identity is derived server-side from session context.");
+  }
+
+  const encCtx = getEncounterSessionContext(req);
+  if (!encCtx) {
+    logRequest(req, 401, { reason: "no_encounter_session" });
+    return ERR.AUTHENTICATION_REQUIRED(res, "Active patient encounter session required for intake interview");
+  }
+
+  const parseResult = IntakeInterviewStepSchema.safeParse(req.body);
+  if (!parseResult.success) {
+    return ERR.VALIDATION_ERROR(res, "Invalid interview step parameters", { issues: parseResult.error.issues });
+  }
+
+  const { sessionId, questionKey, answerText, action, language } = parseResult.data;
+
+  const sessionRecord = await prisma.interviewSession.findUnique({
+    where: { sessionId }
+  });
+  if (!sessionRecord) {
+    return res.status(404).json({
+      error: {
+        code: "NOT_FOUND",
+        message: `Interview session ${sessionId} not found`,
+        requestId: req.requestId
+      }
+    });
+  }
+  if (sessionRecord.patientUid !== encCtx.patientUid) {
+    return ERR.PATIENT_SCOPE_MISMATCH(res, "Session does not belong to active patient context");
+  }
+
+  try {
+    const result = await interviewPlanner.processStep({
+      sessionId,
+      questionKey,
+      answerText,
+      action,
+      language
+    });
+
+    logRequest(req, 200, { sessionId, currentStep: result.currentStep, isComplete: result.isComplete });
+    return res.json({
+      success: true,
+      sessionId: result.sessionId,
+      status: result.status,
+      isComplete: result.isComplete,
+      currentStep: result.currentStep,
+      totalQuestions: result.totalQuestions,
+      coveredDomains: result.coveredDomains,
+      nextQuestion: result.nextQuestion,
+      isRetry: result.isRetry || false,
+      reviewSummary: result.reviewSummary || null
+    });
+  } catch (err) {
+    if (err.code === "INVALID_LIFECYCLE_TRANSITION") {
+      logRequest(req, 409, { reason: err.message });
+      return ERR.INVALID_LIFECYCLE_TRANSITION(res, err.message);
+    }
+    logError(req, "PLANNER_STEP_ERROR", err.message, err);
+    return res.status(500).json({
+      error: {
+        code: "PLANNER_UNAVAILABLE",
+        message: err.message || "Failed to process interview turn",
+        requestId: req.requestId
+      }
+    });
+  }
+});
+
+// GET /api/intake/interview/review
+app.get("/api/intake/interview/review", async (req, res) => {
+  if (req.query && (req.query.patientUid !== undefined || req.query.patientId !== undefined)) {
+    logRequest(req, 400, { securityViolation: "patientUid_in_intake_query" });
+    return ERR.VALIDATION_ERROR(res, "Public intake APIs do not accept patientUid or patientId in query parameters. Identity is derived server-side from session context.");
+  }
+
+  const encCtx = getEncounterSessionContext(req);
+  if (!encCtx) {
+    logRequest(req, 401, { reason: "no_encounter_session" });
+    return ERR.AUTHENTICATION_REQUIRED(res, "Active patient encounter session required for intake interview");
+  }
+
+  const sessionId = req.query.sessionId;
+  if (!sessionId) {
+    return ERR.VALIDATION_ERROR(res, "sessionId query parameter is required");
+  }
+
+  const sessionRecord = await prisma.interviewSession.findUnique({
+    where: { sessionId: String(sessionId) }
+  });
+  if (!sessionRecord) {
+    return res.status(404).json({
+      error: {
+        code: "NOT_FOUND",
+        message: `Interview session ${sessionId} not found`,
+        requestId: req.requestId
+      }
+    });
+  }
+  if (sessionRecord.patientUid !== encCtx.patientUid) {
+    return ERR.PATIENT_SCOPE_MISMATCH(res, "Session does not belong to active patient context");
+  }
+
+  try {
+    const turns = await interviewPlanner.getReview(String(sessionId));
+    logRequest(req, 200, { sessionId, turnsCount: turns.length });
+    return res.json({
+      success: true,
+      sessionId: String(sessionId),
+      turns
+    });
+  } catch (err) {
+    logError(req, "PLANNER_REVIEW_ERROR", err.message, err);
+    return res.status(500).json({
+      error: {
+        code: "INTERNAL_ERROR",
+        message: err.message || "Failed to retrieve interview review",
+        requestId: req.requestId
+      }
+    });
+  }
+});
+
+// PUT /api/intake/interview/edit
+app.put("/api/intake/interview/edit", async (req, res) => {
+  if (req.body && (req.body.patientUid !== undefined || req.body.patientId !== undefined)) {
+    logRequest(req, 400, { securityViolation: "patientUid_in_intake_body" });
+    return ERR.VALIDATION_ERROR(res, "Public intake APIs do not accept patientUid or patientId in request body. Identity is derived server-side from session context.");
+  }
+  if (req.query && (req.query.patientUid !== undefined || req.query.patientId !== undefined)) {
+    logRequest(req, 400, { securityViolation: "patientUid_in_intake_query" });
+    return ERR.VALIDATION_ERROR(res, "Public intake APIs do not accept patientUid or patientId in query parameters. Identity is derived server-side from session context.");
+  }
+
+  const encCtx = getEncounterSessionContext(req);
+  if (!encCtx) {
+    logRequest(req, 401, { reason: "no_encounter_session" });
+    return ERR.AUTHENTICATION_REQUIRED(res, "Active patient encounter session required for intake interview");
+  }
+
+  const parseResult = IntakeInterviewEditSchema.safeParse(req.body);
+  if (!parseResult.success) {
+    return ERR.VALIDATION_ERROR(res, "Invalid interview edit parameters", { issues: parseResult.error.issues });
+  }
+
+  const { sessionId, turnIndex, newAnswerText } = parseResult.data;
+
+  const sessionRecord = await prisma.interviewSession.findUnique({
+    where: { sessionId }
+  });
+  if (!sessionRecord) {
+    return res.status(404).json({
+      error: {
+        code: "NOT_FOUND",
+        message: `Interview session ${sessionId} not found`,
+        requestId: req.requestId
+      }
+    });
+  }
+  if (sessionRecord.patientUid !== encCtx.patientUid) {
+    return ERR.PATIENT_SCOPE_MISMATCH(res, "Session does not belong to active patient context");
+  }
+
+  try {
+    const result = await interviewPlanner.editTurn({ sessionId, turnIndex, newAnswerText });
+
+    // Clinical Audit Trail: Log turn modification event
+    await createAuditLog(prisma, {
+      actorType: req.device ? "DEVICE" : (req.user ? "USER" : "SERVICE"),
+      actorDeviceId: req.device?.deviceId || null,
+      actorUserId: req.user?.id || null,
+      actorService: !req.device && !req.user ? "patient_intake_service" : null,
+      action: "EDIT_INTERVIEW_TURN",
+      patientUid: encCtx.patientUid,
+      resourceType: "InterviewTurn",
+      resourceId: `${sessionId}:turn_${turnIndex}`,
+      metadata: {
+        sessionId,
+        turnIndex,
+        questionKey: result.turn.questionKey,
+        answerType: result.turn.answerType,
+        provenance: result.turn.provenance,
+        characterLength: newAnswerText.length,
+        revalidatedCategory: result.revalidatedState?.complaintCategory
+      }
+    });
+
+    logRequest(req, 200, { sessionId, turnIndex });
+    return res.json({
+      success: true,
+      turn: result.turn,
+      revalidatedState: result.revalidatedState
+    });
+  } catch (err) {
+    if (err.code === "INVALID_LIFECYCLE_TRANSITION") {
+      logRequest(req, 409, { reason: err.message });
+      return ERR.INVALID_LIFECYCLE_TRANSITION(res, err.message);
+    }
+    logError(req, "PLANNER_EDIT_ERROR", err.message, err);
+    return res.status(500).json({
+      error: {
+        code: "INTERNAL_ERROR",
+        message: err.message || "Failed to update interview turn",
+        requestId: req.requestId
+      }
+    });
+  }
+});
+
+// POST /api/intake/interview/submit
+app.post("/api/intake/interview/submit", async (req, res) => {
+  if (req.body && (req.body.patientUid !== undefined || req.body.patientId !== undefined)) {
+    logRequest(req, 400, { securityViolation: "patientUid_in_intake_body" });
+    return ERR.VALIDATION_ERROR(res, "Public intake APIs do not accept patientUid or patientId in request body. Identity is derived server-side from session context.");
+  }
+  if (req.query && (req.query.patientUid !== undefined || req.query.patientId !== undefined)) {
+    logRequest(req, 400, { securityViolation: "patientUid_in_intake_query" });
+    return ERR.VALIDATION_ERROR(res, "Public intake APIs do not accept patientUid or patientId in query parameters. Identity is derived server-side from session context.");
+  }
+
+  const encCtx = getEncounterSessionContext(req);
+  if (!encCtx) {
+    logRequest(req, 401, { reason: "no_encounter_session" });
+    return ERR.AUTHENTICATION_REQUIRED(res, "Active patient encounter session required for intake interview");
+  }
+
+  const parseResult = IntakeInterviewSubmitSchema.safeParse(req.body);
+  if (!parseResult.success) {
+    return ERR.VALIDATION_ERROR(res, "Invalid interview submit parameters", { issues: parseResult.error.issues });
+  }
+
+  const { sessionId } = parseResult.data;
+
+  const sessionRecord = await prisma.interviewSession.findUnique({
+    where: { sessionId }
+  });
+  if (!sessionRecord) {
+    return res.status(404).json({
+      error: {
+        code: "NOT_FOUND",
+        message: `Interview session ${sessionId} not found`,
+        requestId: req.requestId
+      }
+    });
+  }
+  if (sessionRecord.patientUid !== encCtx.patientUid) {
+    return ERR.PATIENT_SCOPE_MISMATCH(res, "Session does not belong to active patient context");
+  }
+
+  try {
+    const result = await interviewPlanner.submitIntake(sessionId);
+    logRequest(req, 200, { sessionId, encounterId: result.encounterId, alreadySubmitted: Boolean(result.alreadySubmitted) });
+    return res.json({
+      success: true,
+      sessionId: result.sessionId,
+      encounterId: result.encounterId,
+      chiefComplaint: result.chiefComplaint,
+      hpi: result.hpi,
+      totalAnswered: result.totalAnswered,
+      alreadySubmitted: Boolean(result.alreadySubmitted)
+    });
+  } catch (err) {
+    if (err.code === "INVALID_LIFECYCLE_TRANSITION") {
+      logRequest(req, 409, { reason: err.message });
+      return ERR.INVALID_LIFECYCLE_TRANSITION(res, err.message);
+    }
+    logError(req, "PLANNER_SUBMIT_ERROR", err.message, err);
+    return res.status(500).json({
+      error: {
+        code: "INTERNAL_ERROR",
+        message: err.message || "Failed to submit intake interview",
+        requestId: req.requestId
+      }
+    });
   }
 });
 

@@ -13,20 +13,25 @@ import {
   Stethoscope,
   Volume2,
   CheckCircle2,
-  AlertCircle
+  AlertCircle,
+  SkipForward,
+  HelpCircle,
+  Edit3,
+  Check,
+  X,
+  FileText
 } from "lucide-react";
-// NOTE (Phase 3): Direct browser Gemini import removed.
-// AI calls now route through the secure Node backend proxy: POST /api/ai/intake-question
-// The GEMINI_API_KEY secret exists only in the server-side .env and is never in the browser bundle.
+// Phase 5A: Authoritative state machine on backend (/api/intake/interview/*)
+// Local clinicalDialogEngine preserved as authoritative offline fallback
 import { getAdaptiveClinicalResponse } from "../utils/clinicalDialogEngine";
 
 const CLINICAL_STEPS = [
   "Chief Complaint",
-  "Pain / Symptoms",
-  "Duration",
-  "Medical History",
-  "Current Meds",
-  "Summary"
+  "Duration & Onset",
+  "Severity & Character",
+  "Spread & Radiation",
+  "Aggravating Factors",
+  "Current Medications"
 ];
 
 export const AIInterviewPage = () => {
@@ -46,18 +51,30 @@ export const AIInterviewPage = () => {
   const [inputText, setInputText] = useState("");
   const [isThinking, setIsThinking] = useState(false);
   const [currentStep, setCurrentStep] = useState(0);
+  const [totalQuestions, setTotalQuestions] = useState(5);
+
+  // Phase 5A Interview Session & State Machine
+  const [sessionId, setSessionId] = useState(null);
+  const [currentQuestionKey, setCurrentQuestionKey] = useState(null);
+  const [isComplete, setIsComplete] = useState(false);
+  const [showReviewModal, setShowReviewModal] = useState(false);
+  const [reviewTurns, setReviewTurns] = useState([]);
+  const [editingTurnIndex, setEditingTurnIndex] = useState(null);
+  const [editText, setEditText] = useState("");
+  const [isSubmittingIntake, setIsSubmittingIntake] = useState(false);
+
   const [dynamicOptions, setDynamicOptions] = useState([
-    "पेट में तेज दर्द है",
-    "बुखार और ठंड लग रही है",
-    "खांसी और गले में खराश",
-    "सीने में भारीपन / घबराहट"
+    "सीने में भारीपन / दबाव है",
+    "खांसी और सांस लेने में तकलीफ",
+    "पेट में तेज दर्द / गैस",
+    "बुखार और शरीर में कमजोरी"
   ]);
   const chatEndRef = useRef(null);
 
   const [conversation, setConversation] = useState([
     {
       sender: "ai",
-      text: `नमस्ते ${patientData?.name ? patientData.name.split(" ")[0] : ""} जी! आज आपको क्या तकलीफ है? कृपया अपनी परेशानी बताइए।`,
+      text: `नमस्ते ${patientData?.name ? patientData.name.split(" ")[0] : ""} जी! आज आपको क्या तकलीफ है? कृपया अपनी मुख्य परेशानी बताइए।`,
       time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
     }
   ]);
@@ -66,151 +83,238 @@ export const AIInterviewPage = () => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [conversation, isThinking]);
 
-  const parseOptions = (text) => {
-    const match = text.match(/OPTIONS:\s*(.+)/i);
-    if (match) {
-      const opts = match[1].split("|").map(o => o.trim()).filter(Boolean);
-      return { cleanText: text.replace(/OPTIONS:.+/i, "").trim(), options: opts };
-    }
-    return { cleanText: text, options: [] };
-  };
-
   const checkRedFlag = (text) => {
-    const lower = text.toLowerCase();
+    const lower = (text || "").toLowerCase();
     return ["chest", "seene", "left arm", "baayein", "saans", "breathless", "behosh", "heart", "dil", "chakkar"].some(k => lower.includes(k));
   };
 
   /**
-   * fetchAIResponse — Phase 3: calls the secure Node backend proxy.
-   * The backend holds the Gemini key; this function never touches it.
-   *
-   * On backend success  → returns { text, options, source: "gemini" }
-   * On backend failure  → falls back to clinicalDialogEngine (local, offline-safe)
-   * The two sources are clearly distinguished; the fallback is never labelled as Gemini.
+   * handleStepAction — Dispatches turn to Phase 5A authoritative backend state machine
+   * Supports 'answer', 'skip', and 'unknown' ("Pata Nahi")
+   * Falls back gracefully to clinicalDialogEngine if server/network is offline
    */
-  const fetchAIResponse = async (patientMessage, conversationHistory, stepIndex) => {
-    // Build a clean, bounded conversation history for the backend
-    const cleanHistory = conversationHistory
-      .filter(msg => msg.text)
-      .map(msg => ({ sender: msg.sender, text: msg.text }));
-
-    try {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 8000); // 8s total frontend timeout
-
-      // Build request headers — include session token only if available
-      const headers = { "Content-Type": "application/json" };
-      if (kioskSessionToken) {
-        headers["X-Kiosk-Session"] = kioskSessionToken;
-      }
-
-      const response = await fetch("/api/ai/intake-question", {
-        method:  "POST",
-        headers,
-        signal:  controller.signal,
-        body: JSON.stringify({
-          patientMessage,
-          conversationHistory: cleanHistory,
-          stepIndex,
-          language,
-          // Pass age/gender for clinical context only — NOT name, phone, or ABHA
-          patientAge:    patientData?.age    || undefined,
-          patientGender: patientData?.gender || undefined,
-          // Only send patientUid when we have a session token to authorize it.
-          // Without a session token, omit patientUid — request is anonymous intake
-          // and falls back correctly without triggering 401.
-          patientUid: kioskSessionToken ? (patientData?.patientUid || undefined) : undefined
-        })
-      });
-
-      clearTimeout(timeout);
-
-      if (response.ok) {
-        const data = await response.json();
-        if (data.success && data.text) {
-          return {
-            text:    data.text,
-            options: data.options || ["हाँ, यह है", "नहीं, ऐसा नहीं", "कुछ समय से", "पता नहीं"],
-            source:  "gemini"
-          };
-        }
-      }
-
-      // Backend returned a non-OK status (rate limit, timeout, unavailable)
-      // Use honest offline fallback — do NOT label it as Gemini
-      const errData = await response.json().catch(() => ({}));
-      console.warn("[AIInterview] Backend AI unavailable:", errData?.error?.code || response.status);
-    } catch (err) {
-      // Network error or abort — use offline fallback
-      if (err.name === "AbortError") {
-        console.warn("[AIInterview] Backend AI request timed out; using offline clinical engine.");
-      } else {
-        console.warn("[AIInterview] Backend AI request failed; using offline clinical engine:", err.message);
-      }
-    }
-
-    // Honest offline fallback: clinicalDialogEngine.js
-    // This is local rule-based logic, NOT Gemini. Clearly distinguished.
-    return getAdaptiveClinicalResponse(patientMessage, conversationHistory, stepIndex);
-  };
-
-  const handleSend = async (textToSend) => {
-    const text = textToSend || inputText;
-    if (!text.trim() || isThinking) return;
+  const handleStepAction = async (actionType = "answer", textValue = null) => {
+    const text = textValue !== null ? textValue : inputText;
+    if (actionType === "answer" && !text.trim()) return;
+    if (isThinking || isComplete) return;
 
     const timeStr = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-    const updatedConv = [...conversation, { sender: "patient", text, time: timeStr }];
+    let patientDisplay = text;
+    if (actionType === "skip") patientDisplay = "छोड़ें (Skip)";
+    else if (actionType === "unknown") patientDisplay = "पता नहीं (Pata Nahi / Don't Know)";
+
+    const updatedConv = [...conversation, { sender: "patient", text: patientDisplay, time: timeStr }];
     setConversation(updatedConv);
     setInputText("");
     setIsThinking(true);
 
-    if (checkRedFlag(text)) {
+    if (actionType === "answer" && checkRedFlag(text)) {
       setRedFlagTriggered(true);
     }
-
-    const nextStepIdx = Math.min(currentStep + 1, CLINICAL_STEPS.length - 1);
-    setCurrentStep(nextStepIdx);
 
     const aiTime = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
     setConversation(prev => [...prev, { sender: "ai", text: "", time: aiTime, streaming: true }]);
 
+    const authHeaders = {
+      "Content-Type": "application/json",
+      "X-Requested-With": "XMLHttpRequest",
+      ...(kioskSessionToken ? { "X-Kiosk-Session": kioskSessionToken } : {})
+    };
+
     try {
-      const { text: aiResponseText, options: newOptions } = await fetchAIResponse(
-        text,
-        updatedConv,
-        nextStepIdx
-      );
+      // 1. Initial turn: Start interview session if not yet initialized
+      if (!sessionId) {
+        const startRes = await fetch("/api/intake/interview/start", {
+          method: "POST",
+          headers: authHeaders,
+          credentials: "include",
+          body: JSON.stringify({
+            chiefComplaint: text,
+            language
+          })
+        });
 
-      setIsThinking(false);
-      setConversation(prev => {
-        const copy = [...prev];
-        copy[copy.length - 1] = {
-          sender: "ai",
-          text: aiResponseText,
-          time: aiTime,
-          streaming: false
-        };
-        return copy;
-      });
+        if (startRes.ok) {
+          const startData = await startRes.json();
+          if (startData.success && startData.sessionId) {
+            setSessionId(startData.sessionId);
+            setCurrentStep(startData.currentStep || 1);
+            setTotalQuestions(startData.totalQuestions || 5);
 
-      if (newOptions && newOptions.length > 0) {
-        setDynamicOptions(newOptions);
+            if (startData.isComplete || !startData.nextQuestion) {
+              setIsComplete(true);
+              setShowReviewModal(true);
+              setConversation(prev => {
+                const c = [...prev];
+                c[c.length - 1] = {
+                  sender: "ai",
+                  text: "धन्यवाद! आपकी प्राथमिक जानकारी दर्ज कर ली गई है। कृपया नीचे दी गई समरी की जांच करें।",
+                  time: aiTime,
+                  streaming: false
+                };
+                return c;
+              });
+              setIsThinking(false);
+              return;
+            }
+
+            setCurrentQuestionKey(startData.nextQuestion.questionKey);
+            setDynamicOptions(startData.nextQuestion.options || []);
+            setConversation(prev => {
+              const c = [...prev];
+              c[c.length - 1] = {
+                sender: "ai",
+                text: startData.nextQuestion.text,
+                time: aiTime,
+                streaming: false
+              };
+              return c;
+            });
+            setIsThinking(false);
+            return;
+          }
+        }
+      } else {
+        // 2. Subsequent turns: Step the authoritative interview state machine
+        const stepRes = await fetch("/api/intake/interview/step", {
+          method: "POST",
+          headers: authHeaders,
+          credentials: "include",
+          body: JSON.stringify({
+            sessionId,
+            questionKey: currentQuestionKey || "general",
+            answerText: actionType === "answer" ? text : undefined,
+            action: actionType,
+            language
+          })
+        });
+
+        if (stepRes.ok) {
+          const stepData = await stepRes.json();
+          if (stepData.success) {
+            setCurrentStep(stepData.currentStep);
+            setTotalQuestions(stepData.totalQuestions || 5);
+
+            if (stepData.isComplete || !stepData.nextQuestion) {
+              setIsComplete(true);
+              setShowReviewModal(true);
+              if (stepData.reviewSummary) {
+                setReviewTurns(stepData.reviewSummary);
+              }
+              setConversation(prev => {
+                const c = [...prev];
+                c[c.length - 1] = {
+                  sender: "ai",
+                  text: "बहुत बढ़िया! आपके सभी मुख्य लक्षणों का विवरण सफलतापूर्वक दर्ज हो गया है। कृपया नीचे दिए गए रिव्यू में अपने उत्तर जांच लें।",
+                  time: aiTime,
+                  streaming: false
+                };
+                return c;
+              });
+              setIsThinking(false);
+              return;
+            }
+
+            setCurrentQuestionKey(stepData.nextQuestion.questionKey);
+            setDynamicOptions(stepData.nextQuestion.options || []);
+            setConversation(prev => {
+              const c = [...prev];
+              c[c.length - 1] = {
+                sender: "ai",
+                text: stepData.nextQuestion.text,
+                time: aiTime,
+                streaming: false
+              };
+              return c;
+            });
+            setIsThinking(false);
+            return;
+          }
+        }
       }
-    } catch (e) {
-      console.error("Clinical response error:", e);
-      const fallback = getAdaptiveClinicalResponse(text, updatedConv, nextStepIdx);
-      setIsThinking(false);
-      setConversation(prev => {
-        const copy = [...prev];
-        copy[copy.length - 1] = {
-          sender: "ai",
-          text: fallback.text,
-          time: aiTime,
-          streaming: false
-        };
-        return copy;
+    } catch (err) {
+      console.warn("[AIInterview] Gateway interview step unavailable; engaging offline clinicalDialogEngine:", err.message);
+    }
+
+    // 3. Offline fallback to local clinicalDialogEngine
+    const nextStepIdx = Math.min(currentStep + 1, CLINICAL_STEPS.length - 1);
+    setCurrentStep(nextStepIdx);
+    const fallback = getAdaptiveClinicalResponse(text, updatedConv, nextStepIdx);
+    setIsThinking(false);
+    setConversation(prev => {
+      const copy = [...prev];
+      copy[copy.length - 1] = {
+        sender: "ai",
+        text: fallback.text,
+        time: aiTime,
+        streaming: false
+      };
+      return copy;
+    });
+    setDynamicOptions(fallback.options);
+  };
+
+  /**
+   * handleSaveEdit — Persists inline edits to prior turns via PUT /api/intake/interview/edit
+   */
+  const handleSaveEdit = async (turnIndex, newText) => {
+    if (!sessionId || !newText.trim()) return;
+    try {
+      const res = await fetch("/api/intake/interview/edit", {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Requested-With": "XMLHttpRequest",
+          ...(kioskSessionToken ? { "X-Kiosk-Session": kioskSessionToken } : {})
+        },
+        credentials: "include",
+        body: JSON.stringify({
+          sessionId,
+          turnIndex,
+          newAnswerText: newText
+        })
       });
-      setDynamicOptions(fallback.options);
+      const data = await res.json();
+      if (data.success && data.turn) {
+        setReviewTurns(prev =>
+          prev.map(t => (t.turnIndex === turnIndex ? { ...t, answerText: data.turn.answerText, answerType: "answered" } : t))
+        );
+        setEditingTurnIndex(null);
+        setEditText("");
+      }
+    } catch (err) {
+      console.error("[AIInterview] Failed to edit turn:", err);
+    }
+  };
+
+  /**
+   * handleSubmitIntake — Finalizes interview via POST /api/intake/interview/submit
+   * Updates encounter HPI narrative and transitions to document scan / doctor queue
+   */
+  const handleSubmitIntake = async () => {
+    setIsSubmittingIntake(true);
+    try {
+      if (sessionId) {
+        await fetch("/api/intake/interview/submit", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Requested-With": "XMLHttpRequest",
+            ...(kioskSessionToken ? { "X-Kiosk-Session": kioskSessionToken } : {})
+          },
+          credentials: "include",
+          body: JSON.stringify({ sessionId })
+        });
+      }
+      saveInterviewAndGenerateSummary(conversation);
+      if (isDemoMode) nextDemoStep();
+      else setActiveTab("scanner");
+    } catch (err) {
+      console.error("[AIInterview] Submit intake error:", err);
+      saveInterviewAndGenerateSummary(conversation);
+      setActiveTab("scanner");
+    } finally {
+      setIsSubmittingIntake(false);
     }
   };
 
@@ -241,9 +345,9 @@ export const AIInterviewPage = () => {
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <h2 className="text-base font-black text-slate-900">Medical Chatbot (Clinical Intake)</h2>
-                <span className="bg-blue-50 text-blue-700 border border-blue-200 text-[10px] font-black px-2 py-0.5 rounded-full">
-                  AI Assisted
+                <h2 className="text-base font-black text-slate-900">Adaptive Clinical Intake</h2>
+                <span className="bg-emerald-50 text-emerald-700 border border-emerald-200 text-[10px] font-black px-2 py-0.5 rounded-full">
+                  Phase 5A State Machine
                 </span>
               </div>
               <p className="text-xs text-slate-500 font-medium">
@@ -254,24 +358,32 @@ export const AIInterviewPage = () => {
 
           <div className="text-right">
             <span className="text-xs font-bold text-slate-500 block">
-              Step {currentStep + 1} of {CLINICAL_STEPS.length}: <strong className="text-blue-700">{CLINICAL_STEPS[currentStep]}</strong>
+              Question {Math.min(currentStep, totalQuestions)} of {totalQuestions}:{" "}
+              <strong className="text-blue-700">
+                {CLINICAL_STEPS[Math.min(currentStep, CLINICAL_STEPS.length - 1)]}
+              </strong>
             </span>
+            {isComplete && (
+              <span className="text-[11px] font-extrabold text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
+                ✓ Intake Complete (रिव्यू तैयार)
+              </span>
+            )}
           </div>
         </div>
 
         {/* Multi-step progress bar */}
-        <div className="grid grid-cols-6 gap-1.5 pt-1">
-          {CLINICAL_STEPS.map((step, idx) => (
+        <div className="grid grid-cols-5 gap-1.5 pt-1">
+          {[1, 2, 3, 4, 5].map((stepNum, idx) => (
             <div key={idx} className="space-y-1">
               <div
                 className={`h-1.5 rounded-full transition-all duration-300 ${
-                  idx <= currentStep ? "bg-blue-600" : "bg-slate-200"
+                  idx < currentStep || isComplete ? "bg-blue-600" : "bg-slate-200"
                 }`}
               />
               <span className={`hidden sm:block text-[9px] truncate font-bold text-center ${
-                idx <= currentStep ? "text-blue-700 font-extrabold" : "text-slate-400"
+                idx < currentStep || isComplete ? "text-blue-700 font-extrabold" : "text-slate-400"
               }`}>
-                {step}
+                Step {stepNum}
               </span>
             </div>
           ))}
@@ -313,7 +425,7 @@ export const AIInterviewPage = () => {
                     <span className="w-2 h-2 rounded-full bg-blue-500 animate-bounce" style={{ animationDelay: "0ms" }} />
                     <span className="w-2 h-2 rounded-full bg-blue-500 animate-bounce" style={{ animationDelay: "150ms" }} />
                     <span className="w-2 h-2 rounded-full bg-blue-500 animate-bounce" style={{ animationDelay: "300ms" }} />
-                    <span className="ml-1 text-[11px] font-bold text-slate-500">Clinical AI is thinking...</span>
+                    <span className="ml-1 text-[11px] font-bold text-slate-500">Authoritative AI Planner is thinking...</span>
                   </div>
                 )}
                 <span
@@ -331,76 +443,226 @@ export const AIInterviewPage = () => {
 
         {/* Interactive Bottom Control Panel */}
         <div className="p-4 sm:p-5 bg-white border-t border-slate-200 space-y-3.5">
-          {/* Microphone & Voice Waveform Visualizer */}
-          <div className="flex flex-col items-center justify-center gap-2">
-            <div className="relative flex items-center justify-center">
-              {isListening && (
-                <div className="absolute w-20 h-20 rounded-full bg-red-500/20 animate-ping" />
-              )}
+          {!isComplete ? (
+            <>
+              {/* Voice & Quick Actions Bar */}
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                {/* Skip and Pata Nahi Action Buttons (Phase 5A Core) */}
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => handleStepAction("skip")}
+                    disabled={isThinking || !sessionId}
+                    className="flex items-center gap-1.5 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 text-xs font-bold px-3.5 py-1.5 rounded-xl transition cursor-pointer disabled:opacity-40"
+                    title="Skip this question (अगला सवाल)"
+                  >
+                    <SkipForward size={14} />
+                    <span>छोड़ें (Skip)</span>
+                  </button>
+
+                  <button
+                    onClick={() => handleStepAction("unknown")}
+                    disabled={isThinking || !sessionId}
+                    className="flex items-center gap-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 text-xs font-bold px-3.5 py-1.5 rounded-xl transition cursor-pointer disabled:opacity-40"
+                    title="Don't know / not sure (पता नहीं)"
+                  >
+                    <HelpCircle size={14} />
+                    <span>पता नहीं (Don't Know)</span>
+                  </button>
+                </div>
+
+                {/* Microphone Button */}
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={toggleMic}
+                    className={`h-9 px-3.5 rounded-xl flex items-center gap-2 text-white shadow-sm transition text-xs font-bold cursor-pointer ${
+                      isListening ? "bg-rose-600 ring-2 ring-rose-300 animate-pulse" : "bg-blue-600 hover:bg-blue-700"
+                    }`}
+                  >
+                    {isListening ? <MicOff size={15} /> : <Mic size={15} />}
+                    <span>{isListening ? "Listening..." : "बोलकर बताएं (Mic)"}</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Dynamic Option Pills */}
+              <div className="flex flex-wrap justify-center gap-2">
+                {dynamicOptions.map((opt, i) => (
+                  <button
+                    key={i}
+                    onClick={() => handleStepAction("answer", opt)}
+                    disabled={isThinking}
+                    className="bg-slate-50 hover:bg-blue-50 text-slate-800 hover:text-blue-700 border border-slate-200 hover:border-blue-300 font-bold text-xs px-4 py-2 rounded-xl transition transform active:scale-95 disabled:opacity-50 cursor-pointer shadow-2xs hover:-translate-y-0.5"
+                  >
+                    {opt}
+                  </button>
+                ))}
+              </div>
+
+              {/* Text Input Row */}
+              <div className="flex items-center gap-2 pt-1">
+                <input
+                  type="text"
+                  value={inputText}
+                  onChange={(e) => setInputText(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && handleStepAction("answer")}
+                  placeholder="अपनी तकलीफ या उत्तर यहाँ लिखें..."
+                  className="flex-1 bg-slate-50/80 border border-slate-300 rounded-2xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white font-medium"
+                />
+                <button
+                  onClick={() => handleStepAction("answer")}
+                  disabled={isThinking || !inputText.trim()}
+                  className="bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white p-3.5 rounded-2xl transition shadow-md shadow-blue-500/20 cursor-pointer"
+                >
+                  <Send size={18} />
+                </button>
+              </div>
+            </>
+          ) : (
+            /* Completed State: Review Trigger */
+            <div className="py-2 flex items-center justify-between gap-4 bg-emerald-50 border border-emerald-200 rounded-2xl px-5">
+              <div className="flex items-center gap-3">
+                <CheckCircle2 size={24} className="text-emerald-600 shrink-0" />
+                <div>
+                  <h4 className="text-sm font-extrabold text-emerald-900">Intake Questionnaire Complete</h4>
+                  <p className="text-xs text-emerald-700">Please review your responses before final submission.</p>
+                </div>
+              </div>
               <button
-                onClick={toggleMic}
-                className={`w-16 h-16 rounded-2xl flex items-center justify-center text-white shadow-lg transition-all transform active:scale-95 cursor-pointer z-10 ${
-                  isListening
-                    ? "bg-rose-600 ring-4 ring-rose-200 shadow-rose-500/30"
-                    : "bg-gradient-to-tr from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 shadow-blue-500/30"
-                }`}
-                title={isListening ? "Stop Recording" : "Tap to Speak"}
+                onClick={() => setShowReviewModal(true)}
+                className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-black px-4 py-2.5 rounded-xl shadow-sm transition flex items-center gap-1.5 cursor-pointer"
               >
-                {isListening ? <MicOff size={28} /> : <Mic size={28} />}
+                <FileText size={15} />
+                <span>जवाब की समीक्षा करें (Review & Edit)</span>
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Patient Intake Review & Edit Drawer / Modal (Phase 5A Core) */}
+      {showReviewModal && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white w-full max-w-2xl rounded-3xl shadow-2xl border border-slate-200 overflow-hidden flex flex-col max-h-[90vh]">
+            {/* Modal Header */}
+            <div className="p-5 bg-gradient-to-r from-blue-700 to-indigo-700 text-white flex justify-between items-center">
+              <div>
+                <h3 className="text-base font-black flex items-center gap-2">
+                  <FileText size={18} />
+                  <span>मरीज द्वारा दी गई जानकारी की समीक्षा (Intake Review)</span>
+                </h3>
+                <p className="text-xs text-blue-100 mt-0.5">
+                  Check your recorded symptoms. You may edit any response before saving.
+                </p>
+              </div>
+              <button
+                onClick={() => setShowReviewModal(false)}
+                className="text-white/80 hover:text-white p-1.5 rounded-xl hover:bg-white/10 transition cursor-pointer"
+              >
+                <X size={20} />
               </button>
             </div>
 
-            {/* Audio Waveform Effect when recording */}
-            {isListening ? (
-              <div className="flex items-center gap-1 h-7">
-                <span className="w-1 bg-rose-500 rounded-full animate-wave-1" />
-                <span className="w-1 bg-rose-500 rounded-full animate-wave-2" />
-                <span className="w-1 bg-rose-600 rounded-full animate-wave-3" />
-                <span className="w-1 bg-rose-500 rounded-full animate-wave-4" />
-                <span className="w-1 bg-rose-500 rounded-full animate-wave-5" />
-                <span className="text-xs text-rose-600 font-bold ml-2">Listening... bolte rahiye</span>
-              </div>
-            ) : (
-              <p className="text-[11px] text-slate-500 font-medium">
-                Tap Mic to Speak (बोलकर बताएं) ya neeche option chunein
-              </p>
-            )}
-          </div>
+            {/* Modal Turns List */}
+            <div className="p-5 overflow-y-auto space-y-3 flex-1 bg-slate-50">
+              {reviewTurns.length === 0 ? (
+                <div className="text-center py-8 text-slate-500 text-xs">
+                  Loading responses...
+                </div>
+              ) : (
+                reviewTurns.map((turn) => (
+                  <div
+                    key={turn.turnIndex}
+                    className="bg-white p-4 rounded-2xl border border-slate-200/90 shadow-2xs space-y-2"
+                  >
+                    <div className="flex justify-between items-start gap-2">
+                      <div className="space-y-0.5">
+                        <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                          Question #{turn.turnIndex} ({turn.questionKey})
+                        </span>
+                        <p className="text-xs font-bold text-slate-900">{turn.questionText}</p>
+                      </div>
+                      <span
+                        className={`text-[9px] font-black px-2 py-0.5 rounded-full border ${
+                          turn.answerType === "skipped"
+                            ? "bg-amber-50 text-amber-700 border-amber-200"
+                            : turn.answerType === "unknown"
+                            ? "bg-slate-100 text-slate-600 border-slate-300"
+                            : "bg-emerald-50 text-emerald-700 border-emerald-200"
+                        }`}
+                      >
+                        {turn.provenance || "PATIENT_REPORTED"}
+                      </span>
+                    </div>
 
-          {/* Dynamic Option Pills */}
-          <div className="flex flex-wrap justify-center gap-2">
-            {dynamicOptions.map((opt, i) => (
+                    {editingTurnIndex === turn.turnIndex ? (
+                      <div className="pt-2 space-y-2">
+                        <input
+                          type="text"
+                          value={editText}
+                          onChange={(e) => setEditText(e.target.value)}
+                          className="w-full bg-slate-50 border border-blue-400 rounded-xl px-3 py-2 text-xs font-medium focus:outline-none focus:ring-2 focus:ring-blue-500"
+                          placeholder="Updated answer..."
+                        />
+                        <div className="flex justify-end gap-2">
+                          <button
+                            onClick={() => {
+                              setEditingTurnIndex(null);
+                              setEditText("");
+                            }}
+                            className="text-xs text-slate-500 hover:text-slate-700 px-3 py-1 font-bold cursor-pointer"
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            onClick={() => handleSaveEdit(turn.turnIndex, editText)}
+                            className="bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold px-3 py-1.5 rounded-lg flex items-center gap-1 cursor-pointer"
+                          >
+                            <Check size={12} /> Save Change
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="flex justify-between items-center pt-1 border-t border-slate-100">
+                        <p className="text-xs font-semibold text-slate-800">
+                          {turn.answerText || "[No answer provided]"}
+                        </p>
+                        <button
+                          onClick={() => {
+                            setEditingTurnIndex(turn.turnIndex);
+                            setEditText(turn.answerText || "");
+                          }}
+                          className="text-blue-600 hover:text-blue-800 text-[11px] font-bold flex items-center gap-1 cursor-pointer hover:underline"
+                        >
+                          <Edit3 size={12} /> बदलें (Edit)
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                ))
+              )}
+            </div>
+
+            {/* Modal Bottom Actions */}
+            <div className="p-4 bg-white border-t border-slate-200 flex justify-between items-center gap-3">
               <button
-                key={i}
-                onClick={() => handleSend(opt)}
-                disabled={isThinking}
-                className="bg-slate-50 hover:bg-blue-50 text-slate-800 hover:text-blue-700 border border-slate-200 hover:border-blue-300 font-bold text-xs px-4 py-2 rounded-xl transition transform active:scale-95 disabled:opacity-50 cursor-pointer shadow-2xs hover:-translate-y-0.5"
+                onClick={() => setShowReviewModal(false)}
+                className="text-xs font-bold text-slate-600 hover:text-slate-900 px-4 py-2 cursor-pointer"
               >
-                {opt}
+                Continue Chatting
               </button>
-            ))}
-          </div>
 
-          {/* Text Input Row */}
-          <div className="flex items-center gap-2 pt-1">
-            <input
-              type="text"
-              value={inputText}
-              onChange={(e) => setInputText(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && handleSend()}
-              placeholder="Apni takleef ya sawal yahan type karein..."
-              className="flex-1 bg-slate-50/80 border border-slate-300 rounded-2xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white font-medium"
-            />
-            <button
-              onClick={() => handleSend()}
-              disabled={isThinking || !inputText.trim()}
-              className="bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white p-3.5 rounded-2xl transition shadow-md shadow-blue-500/20 cursor-pointer"
-            >
-              <Send size={18} />
-            </button>
+              <button
+                onClick={handleSubmitIntake}
+                disabled={isSubmittingIntake}
+                className="bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs px-6 py-3 rounded-xl flex items-center gap-2 shadow-lg shadow-emerald-500/20 transition cursor-pointer disabled:opacity-50"
+              >
+                <span>{isSubmittingIntake ? "Saving..." : "पुष्टि करें और जमा करें (Confirm & Submit)"}</span>
+                <ArrowRight size={16} />
+              </button>
+            </div>
           </div>
         </div>
-      </div>
+      )}
 
       {/* Bottom Nav Actions */}
       <div className="flex flex-wrap justify-between items-center gap-3">

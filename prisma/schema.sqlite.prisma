@@ -51,6 +51,7 @@ model Patient {
   documents         Document[]
   consents          PatientConsent[]
   auditLogs         AuditLog[]
+  interviewSessions InterviewSession[]
 
   @@index([mobileNumber])
   @@index([abhaNumber])
@@ -81,6 +82,7 @@ model Encounter {
   assignedDoctor    User?              @relation("AssignedDoctor", fields: [assignedDoctorId], references: [id])
   careRelationships CareRelationship[]
   documents         Document[]
+  interviewSessions InterviewSession[]
 
   @@index([patientUid])
   @@index([assignedDoctorId])
@@ -244,4 +246,39 @@ model AuditLog {
   @@index([actorUserId])
   @@index([actorType, action])
   @@index([timestamp])
+}
+
+model InterviewSession {
+  id                Int       @id @default(autoincrement())
+  sessionId         String    @unique
+  patientUid        String
+  encounterId       String
+  complaintCategory String?
+  status            String    @default("in_progress") // in_progress, review_dirty, completed, abandoned
+  totalQuestions    Int       @default(0)
+  createdAt         DateTime  @default(now())
+  completedAt       DateTime?
+
+  patient   Patient         @relation(fields: [patientUid], references: [patientUid], onDelete: Cascade)
+  encounter Encounter       @relation(fields: [encounterId], references: [encounterId], onDelete: Cascade)
+  turns     InterviewTurn[]
+
+  @@index([patientUid])
+  @@index([encounterId])
+}
+
+model InterviewTurn {
+  id           Int              @id @default(autoincrement())
+  sessionId    String
+  turnIndex    Int
+  questionKey  String           // duration_onset, severity_character, radiation_spread, etc.
+  questionText String
+  answerText   String?
+  answerType   String           @default("answered") // answered, skipped, unknown
+  provenance   String           @default("PATIENT_REPORTED") // PATIENT_REPORTED (answered), NOT_REPORTED (skipped), MISSING_OR_UNKNOWN (unknown)
+  timestamp    DateTime         @default(now())
+
+  session InterviewSession @relation(fields: [sessionId], references: [sessionId], onDelete: Cascade)
+
+  @@index([sessionId])
 }
