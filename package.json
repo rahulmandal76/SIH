@@ -15,12 +15,13 @@
     "prisma:validate:sqlite": "prisma validate --schema=prisma/schema.sqlite.prisma",
     "prisma:generate:sqlite": "prisma generate --schema=prisma/schema.sqlite.prisma",
     "prisma:push:sqlite": "prisma db push --schema=prisma/schema.sqlite.prisma",
-    "test:db":            "node tests/phase2_database.test.js",
-    "test:phase2":        "node tests/phase2_database.test.js",
-    "test:phase3":        "node tests/phase3_gateway.test.js",
-    "test:phase4":        "node tests/phase4_identity.test.js",
-    "test:phase5":        "node tests/phase5_interview.test.js",
-    "test:all":           "node tests/phase2_database.test.js && node tests/phase3_gateway.test.js && node tests/phase4_identity.test.js && node tests/phase5_interview.test.js"
+    "test:db": "node tests/phase2_database.test.js",
+    "test:phase2": "node tests/phase2_database.test.js",
+    "test:phase3": "node tests/phase3_gateway.test.js",
+    "test:phase4": "node tests/phase4_identity.test.js",
+    "test:phase5": "node tests/phase5_interview.test.js",
+    "test:phase5b": "node tests/phase5b_documents.test.js",
+    "test:all": "node tests/phase2_database.test.js && node tests/phase3_gateway.test.js && node tests/phase4_identity.test.js && node tests/phase5_interview.test.js && node tests/phase5b_documents.test.js"
   },
   "keywords": [
     "healthcare",
@@ -39,6 +40,7 @@
     "@prisma/client": "^7.10.0",
     "better-sqlite3": "^13.0.3",
     "dotenv": "^16.5.0",
+    "multer": "^2.4.0",
     "pg": "^8.23.0",
     "prisma": "^7.10.0",
     "zod": "^3.25.0"

@@ -4,7 +4,6 @@ dist/
 dist-ssr/
 build/
 *.local
-
 # Python Environments & Bytecode
 .venv/
 venv/
@@ -17,7 +16,6 @@ __pycache__/
 .pytest_cache/
 .coverage
 htmlcov/
-
 # Environment variables & secrets (CRITICAL)
 .env
 .env*.local
@@ -25,7 +23,6 @@ htmlcov/
 .env.development
 *.env
 !.env.example
-
 # Logs
 logs/
 *.log
@@ -33,7 +30,6 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
-
 # Editor & OS files
 .vscode/
 .idea/
@@ -45,13 +41,13 @@ pnpm-debug.log*
 .DS_Store
 Thumbs.db
 Desktop.ini
-
 *.git_backup
 .git_backup/
 *.bak
-
 # Database files
 *.db
 *.db-journal
 *.sqlite
 prisma/dev.db
+# Runtime upload data
+data/

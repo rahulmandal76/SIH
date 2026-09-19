@@ -73,9 +73,22 @@ import { evaluateAbhaStatus, validateAbhaInvariant } from "./server/abdmAdapter.
 import { csrfProtection } from "./server/csrf.js";
 import { createAuditLog } from "./server/audit.js";
 import { InterviewPlanner } from "./server/interviewPlanner.js";
+import multer from "multer";
+import { DocumentIngestionService, MAX_UPLOAD_BYTES } from "./server/documentIngestion.js";
+import { DocumentOCRWorker } from "./server/ocrWorker.js";
 
 const app = express();
 const PORT = process.env.PORT || 5000;
+
+const documentIngestionService = new DocumentIngestionService(prisma);
+const ocrWorker = new DocumentOCRWorker(prisma);
+
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: MAX_UPLOAD_BYTES
+  }
+});
 
 // --------------------------------------------------------------------------
 // 2. Cookie Parser Middleware (Lightweight & Native)
@@ -231,6 +244,10 @@ const ERR = {
   PLANNER_UNAVAILABLE:         (res, msg)        => errorResponse(res, 503, "PLANNER_UNAVAILABLE", msg),
   AI_PROVIDER_UNAVAILABLE:     (res, msg)        => errorResponse(res, 503, "AI_PROVIDER_UNAVAILABLE", msg),
   AI_PROVIDER_TIMEOUT:         (res, msg)        => errorResponse(res, 504, "AI_PROVIDER_TIMEOUT", msg),
+  DUPLICATE_DOCUMENT:          (res, msg, extra) => errorResponse(res, 409, "DUPLICATE_DOCUMENT", msg, extra),
+  FILE_TOO_LARGE:              (res, msg)        => errorResponse(res, 413, "FILE_TOO_LARGE", msg),
+  UNSUPPORTED_MEDIA_TYPE:      (res, msg)        => errorResponse(res, 415, "UNSUPPORTED_MEDIA_TYPE", msg),
+  DOCUMENT_NOT_FOUND:          (res, msg)        => errorResponse(res, 404, "DOCUMENT_NOT_FOUND", msg),
 };
 
 // --------------------------------------------------------------------------
@@ -1727,6 +1744,27 @@ function getEncounterSessionContext(req) {
   return null;
 }
 
+function getUserSessionContext(req) {
+  if (req.user?.id) {
+    return req.user;
+  }
+  const token = req.cookies?.ms_user_session;
+  if (token) {
+    const check = validateUserSession(token);
+    if (check.valid) {
+      return {
+        id: check.session.userId,
+        userUid: check.session.userUid,
+        name: check.session.name,
+        email: check.session.email,
+        role: check.session.role,
+        chamber: check.session.chamber
+      };
+    }
+  }
+  return null;
+}
+
 const IntakeInterviewStartSchema = z.object({
   chiefComplaint: z.string().max(1000).optional().default(""),
   language: z.enum(["Hindi", "English"]).optional().default("Hindi")
@@ -2094,7 +2132,308 @@ app.post("/api/intake/interview/submit", async (req, res) => {
 });
 
 // --------------------------------------------------------------------------
-// 16. RAG Service Boundary — Phase 3 Stub (Scheduled for Phase 5)
+// 16. Document Ingestion, File Storage & Background OCR Engine (Phase 5B)
+// --------------------------------------------------------------------------
+
+// Multer middleware wrapper for clean error handling
+const documentUploadMiddleware = (req, res, next) => {
+  upload.single("file")(req, res, (err) => {
+    if (err) {
+      if (err.code === "LIMIT_FILE_SIZE") {
+        logRequest(req, 413, { reason: "file_too_large" });
+        return ERR.FILE_TOO_LARGE(res, `File exceeds maximum allowable size limit of 15MB`);
+      }
+      return ERR.VALIDATION_ERROR(res, err.message || "Invalid file upload");
+    }
+    next();
+  });
+};
+
+// POST /api/documents/upload
+app.post("/api/documents/upload", documentUploadMiddleware, async (req, res) => {
+  if (req.query && (req.query.patientUid !== undefined || req.query.patientId !== undefined)) {
+    logRequest(req, 400, { securityViolation: "patientUid_in_document_query" });
+    return ERR.VALIDATION_ERROR(res, "Public document APIs do not accept patientUid or patientId in query parameters. Identity is derived server-side from session context.");
+  }
+  if (req.body && (req.body.patientUid !== undefined || req.body.patientId !== undefined)) {
+    logRequest(req, 400, { securityViolation: "patientUid_in_document_body" });
+    return ERR.VALIDATION_ERROR(res, "Public document APIs do not accept patientUid or patientId in request body. Identity is derived server-side from session context.");
+  }
+
+  // Derive identity server-side: ms_encounter_session or ms_user_session
+  const encCtx = getEncounterSessionContext(req);
+  const userCtx = getUserSessionContext(req);
+
+  if (!encCtx && !userCtx) {
+    logRequest(req, 401, { reason: "no_valid_session" });
+    return ERR.AUTHENTICATION_REQUIRED(res, "Active patient encounter session or user session required for document upload");
+  }
+
+  let patientUid = null;
+  let encounterId = null;
+
+  if (encCtx) {
+    if (req.body?.encounterId && req.body.encounterId !== encCtx.encounterId) {
+      logRequest(req, 403, { reason: "cross_encounter_upload_attempt" });
+      return ERR.PATIENT_SCOPE_MISMATCH(res, "Cannot upload documents for an encounter outside the active patient session context");
+    }
+    patientUid = encCtx.patientUid;
+    encounterId = encCtx.encounterId;
+  } else if (userCtx) {
+    // Doctor or staff upload: must target an active encounterId
+    const targetEncounterId = req.body?.encounterId;
+    if (!targetEncounterId) {
+      return ERR.VALIDATION_ERROR(res, "encounterId is required when uploading documents via staff/doctor user session");
+    }
+    const enc = await prisma.encounter.findFirst({
+      where: {
+        OR: [{ encounterId: targetEncounterId }, { tokenNumber: String(targetEncounterId) }]
+      }
+    });
+    if (!enc) {
+      return ERR.PATIENT_NOT_FOUND(res, `Encounter ${targetEncounterId} not found`);
+    }
+    // Verify clinical access: assigned doctor, active CareRelationship, or admin
+    if (userCtx.role !== "admin") {
+      const isAssigned = enc.assignedDoctorId === userCtx.id;
+      let hasCareRel = false;
+      if (!isAssigned) {
+        const careRel = await prisma.careRelationship.findFirst({
+          where: {
+            patientUid: enc.patientUid,
+            doctorId: userCtx.id,
+            status: "active",
+            OR: [
+              { expiresAt: null },
+              { expiresAt: { gt: new Date() } }
+            ],
+            endedAt: null
+          }
+        });
+        hasCareRel = Boolean(careRel);
+      }
+      if (!isAssigned && !hasCareRel) {
+        logRequest(req, 403, { reason: "doctor_not_authorized_for_encounter" });
+        return ERR.CLINICAL_ACCESS_DENIED(res, "Doctor is not assigned to this encounter and has no active CareRelationship");
+      }
+    }
+    patientUid = enc.patientUid;
+    encounterId = enc.encounterId;
+  }
+
+  if (!req.file || !req.file.buffer) {
+    return ERR.VALIDATION_ERROR(res, "No document file uploaded. 'file' field is required in multipart form data.");
+  }
+
+  try {
+    const result = await documentIngestionService.ingestDocument({
+      patientUid,
+      encounterId,
+      fileBuffer: req.file.buffer,
+      originalFileName: req.file.originalname,
+      documentType: req.body?.documentType || "general"
+    });
+
+    // Start background processing worker (non-blocking)
+    ocrWorker.processDocument(result.document.documentId).catch(err => {
+      console.warn(`[OCR_WORKER:ASYNC_ERROR] Failed for ${result.document.documentId}:`, err.message);
+    });
+
+    logRequest(req, 201, { documentId: result.document.documentId, mimeType: result.document.mimeType });
+
+    return res.status(201).json({
+      success: true,
+      document: {
+        documentId: result.document.documentId,
+        fileName: result.document.fileName,
+        fileSize: result.document.fileSize,
+        mimeType: result.document.mimeType,
+        documentType: result.document.documentType,
+        status: result.document.status,
+        uploadDate: result.document.uploadDate,
+        clinicalDate: result.document.clinicalDate,
+        totalPages: result.document.totalPages
+      },
+      job: {
+        jobId: result.job.jobId,
+        jobType: result.job.jobType,
+        status: result.job.status
+      }
+    });
+  } catch (err) {
+    if (err.code === "DUPLICATE_DOCUMENT") {
+      logRequest(req, 409, { duplicate: true, existingDocumentId: err.existingDocumentId });
+      return ERR.DUPLICATE_DOCUMENT(res, "This document has already been uploaded for this patient", {
+        existingDocumentId: err.existingDocumentId
+      });
+    }
+    if (err.code === "FILE_TOO_LARGE") {
+      logRequest(req, 413, { reason: "file_too_large" });
+      return ERR.FILE_TOO_LARGE(res, err.message);
+    }
+    if (err.code === "UNSUPPORTED_MEDIA_TYPE") {
+      logRequest(req, 415, { reason: "unsupported_media_type" });
+      return ERR.UNSUPPORTED_MEDIA_TYPE(res, err.message);
+    }
+    logError(req, "DOCUMENT_INGESTION_ERROR", err.message, err);
+    return res.status(500).json({
+      error: {
+        code: "INGESTION_FAILED",
+        message: err.message || "Failed to ingest document",
+        requestId: req.requestId
+      }
+    });
+  }
+});
+
+// GET /api/documents/:id/pages
+app.get("/api/documents/:id/pages", async (req, res) => {
+  if (req.query && (req.query.patientUid !== undefined || req.query.patientId !== undefined)) {
+    logRequest(req, 400, { securityViolation: "patientUid_in_document_query" });
+    return ERR.VALIDATION_ERROR(res, "Public document APIs do not accept patientUid or patientId in query parameters. Identity is derived server-side from session context.");
+  }
+
+  const encCtx = getEncounterSessionContext(req);
+  const userCtx = getUserSessionContext(req);
+
+  if (!encCtx && !userCtx) {
+    logRequest(req, 401, { reason: "no_valid_session" });
+    return ERR.AUTHENTICATION_REQUIRED(res, "Active patient encounter session or user session required to view document pages");
+  }
+
+  const doc = await prisma.document.findUnique({
+    where: { documentId: req.params.id }
+  });
+
+  if (!doc) {
+    return ERR.DOCUMENT_NOT_FOUND(res, `Document ${req.params.id} not found`);
+  }
+
+  // Enforce caller scope
+  if (encCtx) {
+    if (doc.patientUid !== encCtx.patientUid) {
+      logRequest(req, 403, { reason: "cross_patient_document_access" });
+      return ERR.PATIENT_SCOPE_MISMATCH(res, "Document does not belong to active patient context");
+    }
+  } else if (userCtx) {
+    if (userCtx.role !== "admin") {
+      const hasEncounter = await prisma.encounter.findFirst({
+        where: {
+          patientUid: doc.patientUid,
+          assignedDoctorId: userCtx.id
+        }
+      });
+      const hasCareRel = await prisma.careRelationship.findFirst({
+        where: {
+          patientUid: doc.patientUid,
+          doctorId: userCtx.id,
+          status: "active",
+          OR: [
+            { expiresAt: null },
+            { expiresAt: { gt: new Date() } }
+          ],
+          endedAt: null
+        }
+      });
+      if (!hasEncounter && !hasCareRel) {
+        logRequest(req, 403, { reason: "doctor_not_authorized_for_patient" });
+        return ERR.CLINICAL_ACCESS_DENIED(res, "Doctor is not authorized to access clinical records for this patient");
+      }
+    }
+  }
+
+  const pages = await ocrWorker.getDocumentPages(doc.documentId);
+
+  logRequest(req, 200, { documentId: doc.documentId, pagesCount: pages.length });
+  return res.json({
+    success: true,
+    documentId: doc.documentId,
+    fileName: doc.fileName,
+    totalPages: doc.totalPages,
+    status: doc.status,
+    clinicalDate: doc.clinicalDate,
+    pages: pages.map(p => ({
+      pageNumber: p.pageNumber,
+      extractedText: p.extractedText,
+      ocrStatus: p.ocrStatus,
+      ocrConfidence: p.ocrConfidence
+    }))
+  });
+});
+
+// GET /api/documents/:id/status
+app.get("/api/documents/:id/status", async (req, res) => {
+  if (req.query && (req.query.patientUid !== undefined || req.query.patientId !== undefined)) {
+    logRequest(req, 400, { securityViolation: "patientUid_in_document_query" });
+    return ERR.VALIDATION_ERROR(res, "Public document APIs do not accept patientUid or patientId in query parameters. Identity is derived server-side from session context.");
+  }
+
+  const encCtx = getEncounterSessionContext(req);
+  const userCtx = getUserSessionContext(req);
+
+  if (!encCtx && !userCtx) {
+    logRequest(req, 401, { reason: "no_valid_session" });
+    return ERR.AUTHENTICATION_REQUIRED(res, "Active patient encounter session or user session required to view document status");
+  }
+
+  const doc = await ocrWorker.getDocumentStatus(req.params.id);
+  if (!doc) {
+    return ERR.DOCUMENT_NOT_FOUND(res, `Document ${req.params.id} not found`);
+  }
+
+  if (encCtx) {
+    if (doc.patientUid !== encCtx.patientUid) {
+      logRequest(req, 403, { reason: "cross_patient_document_access" });
+      return ERR.PATIENT_SCOPE_MISMATCH(res, "Document does not belong to active patient context");
+    }
+  } else if (userCtx) {
+    if (userCtx.role !== "admin") {
+      const hasEncounter = await prisma.encounter.findFirst({
+        where: {
+          patientUid: doc.patientUid,
+          assignedDoctorId: userCtx.id
+        }
+      });
+      const hasCareRel = await prisma.careRelationship.findFirst({
+        where: {
+          patientUid: doc.patientUid,
+          doctorId: userCtx.id,
+          status: "active",
+          OR: [
+            { expiresAt: null },
+            { expiresAt: { gt: new Date() } }
+          ],
+          endedAt: null
+        }
+      });
+      if (!hasEncounter && !hasCareRel) {
+        logRequest(req, 403, { reason: "doctor_not_authorized_for_patient" });
+        return ERR.CLINICAL_ACCESS_DENIED(res, "Doctor is not authorized to access clinical records for this patient");
+      }
+    }
+  }
+
+  logRequest(req, 200, { documentId: doc.documentId, status: doc.status });
+  return res.json({
+    success: true,
+    documentId: doc.documentId,
+    fileName: doc.fileName,
+    mimeType: doc.mimeType,
+    status: doc.status,
+    totalPages: doc.totalPages,
+    uploadDate: doc.uploadDate,
+    clinicalDate: doc.clinicalDate,
+    job: doc.jobs && doc.jobs.length > 0 ? {
+      jobId: doc.jobs[0].jobId,
+      jobType: doc.jobs[0].jobType,
+      status: doc.jobs[0].status,
+      errorDetails: doc.jobs[0].errorDetails
+    } : null
+  });
+});
+
+// --------------------------------------------------------------------------
+// 17. RAG Service Boundary — Phase 3 Stub (Scheduled for Phase 5)
 // --------------------------------------------------------------------------
 app.post("/api/rag/query", (req, res) => {
   logRequest(req, 501);
@@ -2132,4 +2471,5 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   });
 }
 
+export { ocrWorker, documentIngestionService };
 export default app;
