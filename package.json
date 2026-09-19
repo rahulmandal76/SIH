@@ -22,7 +22,8 @@
     "test:phase5": "node tests/phase5_interview.test.js",
     "test:phase5b": "node tests/phase5b_documents.test.js",
     "test:phase5c": "node tests/phase5c_facts.test.js",
-    "test:all": "node tests/phase2_database.test.js && node tests/phase3_gateway.test.js && node tests/phase4_identity.test.js && node tests/phase5_interview.test.js && node tests/phase5b_documents.test.js && node tests/phase5c_facts.test.js"
+    "test:phase5d": "node tests/phase5d_vectorstore.test.js",
+    "test:all": "node tests/phase2_database.test.js && node tests/phase3_gateway.test.js && node tests/phase4_identity.test.js && node tests/phase5_interview.test.js && node tests/phase5b_documents.test.js && node tests/phase5c_facts.test.js && node tests/phase5d_vectorstore.test.js"
   },
   "keywords": [
     "healthcare",
