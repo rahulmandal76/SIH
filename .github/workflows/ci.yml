@@ -31,7 +31,7 @@ jobs:
 
       - name: Generate Prisma Client (SQLite local tests)
         run: |
-          cd Patient-case-taking-software- && npx prisma generate --schema=prisma/schema.sqlite.prisma
+          npx prisma generate --schema=prisma/schema.sqlite.prisma
 
       - name: Install Python Dependencies (RAG Service)
         run: |
