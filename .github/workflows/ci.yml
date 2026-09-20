@@ -29,30 +29,27 @@ jobs:
           npm ci
           cd Patient-case-taking-software- && npm ci
 
-      - name: Generate Prisma Client (SQLite local tests)
-        run: |
-          npx prisma generate --schema=prisma/schema.sqlite.prisma
-
       - name: Install Python Dependencies (RAG Service)
         run: |
           pip install -r services/rag_service/requirements.txt
 
+      - name: Generate Prisma Client (SQLite local tests)
+        run: |
+          npx prisma generate --schema=prisma/schema.sqlite.prisma
+
+      - name: Initialize CI SQLite Database
+        run: |
+          npx prisma db push --schema=prisma/schema.sqlite.prisma
+          node scripts/migrate_db_json.js
+
+      - name: Run Node Integration Test Suite
+        run: |
+          npm run test:all
+
+      - name: Run Python Tests
+        run: |
+          python -m unittest tests/test_phase5e_rag.py
+
       - name: Build Production Frontend
         run: |
           npm run build:web
-
-      - name: Run Core Integration Tests
-        run: |
-          # Node integration tests
-          npm run test:phase2
-          npm run test:phase3
-          npm run test:phase4
-          npm run test:phase5
-          npm run test:phase5b
-          npm run test:phase5c
-          npm run test:phase5d
-          npm run test:phase5e
-          npm run test:phase5f
-          npm run test:phase5g
-          # Python unit tests
-          python -m unittest tests/test_phase5e_rag.py
