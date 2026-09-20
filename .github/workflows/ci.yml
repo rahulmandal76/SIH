@@ -42,6 +42,15 @@ jobs:
           npx prisma db push --schema=prisma/schema.sqlite.prisma
           node scripts/migrate_db_json.js
 
+      - name: Install System OCR Dependencies (Tesseract & Devanagari)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y tesseract-ocr tesseract-ocr-hin
+          tesseract --version
+          tesseract --list-langs
+          tesseract --list-langs | grep eng
+          tesseract --list-langs | grep hin
+
       - name: Run Node Integration Test Suite
         run: |
           npm run test:all
