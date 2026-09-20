@@ -77,6 +77,14 @@ import multer from "multer";
 import { DocumentIngestionService, MAX_UPLOAD_BYTES } from "./server/documentIngestion.js";
 import { DocumentOCRWorker } from "./server/ocrWorker.js";
 import { clinicalFactExtractor, ClinicalFactSchema } from "./server/clinicalFactExtractor.js";
+import {
+  validateBrowserRagQuery,
+  authorizeAndResolvePatient,
+  executeFastApiRagQuery,
+  validateAndSanitizeFastApiResponse,
+  auditRagQuery,
+  ragRateLimiter
+} from "./server/ragGateway.js";
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -254,6 +262,11 @@ const ERR = {
   ADMIN_CANNOT_EDIT_CLINICAL_FACTS:  (res, msg)        => errorResponse(res, 403, "ADMIN_CANNOT_EDIT_CLINICAL_FACTS", msg),
   FACT_NOT_FOUND:                    (res, msg)        => errorResponse(res, 404, "FACT_NOT_FOUND", msg),
   INVALID_DOCUMENT_STATUS:           (res, msg)        => errorResponse(res, 409, "INVALID_DOCUMENT_STATUS", msg),
+  RAG_AUTH_REQUIRED:                 (res, msg)        => errorResponse(res, 401, "RAG_AUTH_REQUIRED", msg),
+  CONTEXT_MISMATCH:                  (res, msg)        => errorResponse(res, 409, "CONTEXT_MISMATCH", msg),
+  RAG_SERVICE_UNAVAILABLE:           (res, msg)        => errorResponse(res, 502, "RAG_SERVICE_UNAVAILABLE", msg),
+  RAG_SERVICE_TIMEOUT:               (res, msg)        => errorResponse(res, 504, "RAG_SERVICE_TIMEOUT", msg),
+  RAG_RESPONSE_INVALID:              (res, msg)        => errorResponse(res, 500, "RAG_RESPONSE_INVALID", msg),
 };
 
 // --------------------------------------------------------------------------
@@ -3455,17 +3468,120 @@ app.put("/api/documents/:id/approve", async (req, res) => {
 });
 
 // --------------------------------------------------------------------------
-// 17. RAG Service Boundary — Phase 3 Stub (Scheduled for Phase 5)
+// 17. Longitudinal RAG Gateway — Phase 5F Production Implementation
 // --------------------------------------------------------------------------
-app.post("/api/rag/query", (req, res) => {
-  logRequest(req, 501);
-  res.status(501).json({
-    error: {
-      code:      "NOT_IMPLEMENTED",
-      message:   "RAG service integration is scheduled for Phase 5. The Node API will proxy this request to the internal Python FastAPI RAG service. The browser must not contact the RAG service directly.",
-      requestId: req.requestId
+app.post("/api/rag/query", ragRateLimiter, async (req, res) => {
+  try {
+    // 1. Browser Request Contract: strictly reject patientUid/patientId; validate query, topK, year, context
+    const validation = validateBrowserRagQuery(req);
+    if (!validation.valid) {
+      logRequest(req, 400, { validationError: validation.message });
+      return ERR.VALIDATION_ERROR(res, validation.message);
     }
-  });
+
+    const { encounterId, careRelationshipId, query, topK, year, retrievalPath } = validation;
+
+    // 2. Authentication, role check, and clinical context authorization (derive patientUid internally)
+    const authResult = await authorizeAndResolvePatient(prisma, req, { encounterId, careRelationshipId });
+    if (!authResult.authorized) {
+      logRequest(req, authResult.status, { reason: authResult.message, error: authResult.error });
+      if (authResult.status === 401) {
+        return ERR.RAG_AUTH_REQUIRED(res, authResult.message);
+      }
+      if (authResult.error === "ADMIN_ACCESS_REASON_REQUIRED") {
+        return errorResponse(res, 403, "ADMIN_ACCESS_REASON_REQUIRED", authResult.message);
+      }
+      if (authResult.status === 403) {
+        return ERR.CLINICAL_ACCESS_DENIED(res, authResult.message);
+      }
+      if (authResult.error === "CARE_RELATIONSHIP_NOT_FOUND") {
+        return ERR.CARE_RELATIONSHIP_NOT_FOUND(res, authResult.message);
+      }
+      if (authResult.status === 409) {
+        return ERR.CONTEXT_MISMATCH(res, authResult.message);
+      }
+      return errorResponse(res, authResult.status, authResult.error || "VALIDATION_ERROR", authResult.message);
+    }
+
+    const { patientUid, encounter, careRel, adminReason } = authResult;
+
+    // 3. Internal HTTP Call to FastAPI RAG Service (X-Internal-Secret attached server-side)
+    const fastApiResult = await executeFastApiRagQuery({
+      patientUid,
+      query,
+      topK,
+      year,
+      retrievalPath,
+      encounter
+    });
+
+    if (!fastApiResult.success) {
+      // Audit failed query attempt
+      await auditRagQuery(prisma, {
+        req,
+        patientUid,
+        encounter,
+        careRel,
+        success: false,
+        error: { code: fastApiResult.error },
+        adminReason
+      });
+
+      logRequest(req, fastApiResult.status, { ragError: fastApiResult.error, detail: fastApiResult.message });
+      if (fastApiResult.status === 502) {
+        return ERR.RAG_SERVICE_UNAVAILABLE(res, fastApiResult.message);
+      }
+      if (fastApiResult.status === 504) {
+        return ERR.RAG_SERVICE_TIMEOUT(res, fastApiResult.message);
+      }
+      if (fastApiResult.status === 400) {
+        return ERR.VALIDATION_ERROR(res, fastApiResult.message);
+      }
+      return ERR.RAG_RESPONSE_INVALID(res, fastApiResult.message);
+    }
+
+    // 4. Validate & Sanitize Response (Zero leakage of patientUid, filepaths, secrets, or internal URLs)
+    let sanitized;
+    try {
+      sanitized = validateAndSanitizeFastApiResponse(fastApiResult.data);
+    } catch (parseErr) {
+      await auditRagQuery(prisma, {
+        req,
+        patientUid,
+        encounter,
+        careRel,
+        success: false,
+        error: { code: "RAG_RESPONSE_INVALID" },
+        adminReason
+      });
+      logError(req, "RAG_RESPONSE_INVALID", "Failed to validate/sanitize FastAPI response", parseErr);
+      return ERR.RAG_RESPONSE_INVALID(res, "Internal RAG service returned a malformed response.");
+    }
+
+    // 5. Relational Audit Trail for successful longitudinal RAG query
+    await auditRagQuery(prisma, {
+      req,
+      patientUid,
+      encounter,
+      careRel,
+      success: true,
+      resultData: sanitized,
+      adminReason
+    });
+
+    logRequest(req, 200, {
+      ragSuccess: true,
+      strategy: sanitized.strategy,
+      retrievalPath: sanitized.retrievalPath,
+      citationsCount: sanitized.citations.length,
+      historyAvailable: sanitized.historyAvailable
+    });
+
+    return res.json(sanitized);
+  } catch (err) {
+    logError(req, "INTERNAL_ERROR", "Unexpected error during RAG query", err);
+    return ERR.INTERNAL_ERROR(res, "An unexpected error occurred while processing the longitudinal query.");
+  }
 });
 
 // --------------------------------------------------------------------------

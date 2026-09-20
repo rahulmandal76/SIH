@@ -675,21 +675,43 @@ async function runTestMatrix() {
   // GROUP 8: RAG STUB
   // =========================================================================
 
-  // TEST-P3-26: POST /api/rag/query → 501 NOT_IMPLEMENTED (no fake data)
+  // TEST-P3-26: POST /api/rag/query enforces Phase 5F security boundary
   try {
-    const r = await makeRequest("POST", "/api/rag/query", {
+    // 1. Raw browser patientUid injection strictly rejected with 400 VALIDATION_ERROR
+    const rWithUid = await makeRequest("POST", "/api/rag/query", {
       patientUid: crypto.randomUUID(),
       query: "What are the patient's past conditions?"
     });
-    if (r.status === 501 && r.body?.error?.code === "NOT_IMPLEMENTED") {
-      recordTest("TEST-P3-26", "POST /api/rag/query → 501 NOT_IMPLEMENTED stub", "PASS",
-        "RAG stub correctly documented; no fake AI data returned");
+    const uidRejected = (rWithUid.status === 400 && rWithUid.body?.error?.code === "VALIDATION_ERROR");
+
+    // 2. Unauthenticated clinical query strictly rejected with 401 RAG_AUTH_REQUIRED
+    const rUnauth = await makeRequest("POST", "/api/rag/query", {
+      encounterId: "ENC-SAMPLE-001",
+      query: "What are the patient's past conditions?"
+    });
+    const unauthRejected = (rUnauth.status === 401 && rUnauth.body?.error?.code === "RAG_AUTH_REQUIRED");
+
+    // 3. Patient intake/device session strictly rejected with 403 CLINICAL_ACCESS_DENIED
+    const { createDeviceSession } = await import("../Patient-case-taking-software-/server/sessions.js");
+    const validDeviceToken = createDeviceSession("KIOSK-01", "TERM-01");
+    const rDevice = await makeRequest("POST", "/api/rag/query", {
+      encounterId: "ENC-SAMPLE-001",
+      query: "What are the patient's past conditions?"
+    }, {
+      Cookie: `ms_device_session=${validDeviceToken}`,
+      "X-Requested-With": "XMLHttpRequest"
+    });
+    const deviceRejected = (rDevice.status === 403 && rDevice.body?.error?.code === "CLINICAL_ACCESS_DENIED");
+
+    if (uidRejected && unauthRejected && deviceRejected) {
+      recordTest("TEST-P3-26", "POST /api/rag/query enforces Phase 5F security contract (400 UID, 401 Auth, 403 Device)", "PASS",
+        "Phase 5F gateway boundary enforced: raw patientUid rejected (400), unauthenticated rejected (401), device/patient session rejected (403)");
     } else {
-      recordTest("TEST-P3-26", "POST /api/rag/query → 501 NOT_IMPLEMENTED stub", "FAIL",
-        `Status: ${r.status}, code: ${r.body?.error?.code}`);
+      recordTest("TEST-P3-26", "POST /api/rag/query enforces Phase 5F security contract (400 UID, 401 Auth, 403 Device)", "FAIL",
+        `UID check: ${rWithUid.status} ${rWithUid.body?.error?.code}; Unauth check: ${rUnauth.status} ${rUnauth.body?.error?.code}; Device check: ${rDevice.status} ${rDevice.body?.error?.code}`);
     }
   } catch (err) {
-    recordTest("TEST-P3-26", "POST /api/rag/query → 501 NOT_IMPLEMENTED stub", "FAIL", err.message);
+    recordTest("TEST-P3-26", "POST /api/rag/query enforces Phase 5F security contract", "FAIL", err.message);
   }
 
   // =========================================================================

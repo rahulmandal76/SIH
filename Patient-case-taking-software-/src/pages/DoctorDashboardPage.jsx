@@ -37,6 +37,7 @@ import {
 import { generatePatientPDF } from "../utils/pdfGenerator";
 import { mockSampleDocuments } from "../data/mockData";
 import { jsPDF } from "jspdf";
+import { queryLongitudinalRAG } from "../utils/ragClient";
 
 const isPatientCompleted = (p) => {
   if (!p) return false;
@@ -86,6 +87,30 @@ export const DoctorDashboardPage = () => {
   const [editingPageText, setEditingPageText] = useState("");
   const [editingFactId, setEditingFactId] = useState(null);
   const [editingFactForm, setEditingFactForm] = useState({ factKey: "", factValue: "", unit: "", factType: "diagnosis" });
+
+  // Phase 5F Longitudinal RAG State
+  const [ragQueryText, setRagQueryText] = useState("");
+  const [ragResult, setRagResult] = useState(null);
+  const [ragLoading, setRagLoading] = useState(false);
+  const [ragError, setRagError] = useState(null);
+
+  const handleExecuteRagQuery = async () => {
+    if (!ragQueryText.trim() || !selectedPatient) return;
+    setRagLoading(true);
+    setRagError(null);
+    try {
+      const encounterId = selectedPatient.encounterId || selectedPatient.id || (selectedPatient.token ? `ENC-${selectedPatient.token}` : "ENC-DEFAULT");
+      const data = await queryLongitudinalRAG({
+        encounterId,
+        query: ragQueryText
+      });
+      setRagResult(data);
+    } catch (err) {
+      setRagError(err.message || "Failed to query longitudinal history");
+    } finally {
+      setRagLoading(false);
+    }
+  };
 
   useEffect(() => {
     const docId = selectedDocModal?.documentId || selectedDocModal?.id;
@@ -1544,6 +1569,17 @@ export const DoctorDashboardPage = () => {
                     <MessageSquare size={13} />
                     <span>Kiosk Chat Transcript</span>
                   </button>
+                  <button
+                    onClick={() => setActivePanelTab("rag")}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-bold transition cursor-pointer flex items-center gap-1 ${
+                      activePanelTab === "rag"
+                        ? "bg-blue-600 text-white shadow-xs"
+                        : "text-slate-600 hover:bg-slate-100"
+                    }`}
+                  >
+                    <Sparkles size={13} />
+                    <span>Longitudinal RAG</span>
+                  </button>
                 </div>
 
                 {/* TAB 1: Structured Case Summary */}
@@ -1607,6 +1643,79 @@ export const DoctorDashboardPage = () => {
                       <div className="text-center py-6 text-slate-400">
                         <p>Kiosk interview recorded via standard voice protocol.</p>
                         <p className="text-[10px] mt-1">Review structured clinical case for details.</p>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* TAB 3: Longitudinal RAG */}
+                {activePanelTab === "rag" && (
+                  <div className="space-y-3 text-xs">
+                    <div className="bg-slate-50 p-3 rounded-2xl border border-slate-200">
+                      <strong className="text-slate-500 block text-[10px] uppercase font-bold mb-1.5">
+                        Query Longitudinal Medical History
+                      </strong>
+                      <div className="flex gap-2">
+                        <input
+                          type="text"
+                          value={ragQueryText}
+                          onChange={(e) => setRagQueryText(e.target.value)}
+                          onKeyDown={(e) => { if (e.key === "Enter") handleExecuteRagQuery(); }}
+                          placeholder="Ask about trends, medications, first occurrences..."
+                          className="flex-1 bg-white border border-slate-300 rounded-xl px-3 py-2 text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 font-medium"
+                        />
+                        <button
+                          onClick={handleExecuteRagQuery}
+                          disabled={ragLoading || !ragQueryText.trim()}
+                          className="bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-bold px-3 py-2 rounded-xl flex items-center gap-1 text-xs cursor-pointer transition"
+                        >
+                          {ragLoading ? <RefreshCw size={12} className="animate-spin" /> : <Sparkles size={12} />}
+                          <span>Query</span>
+                        </button>
+                      </div>
+                    </div>
+
+                    {ragError && (
+                      <div className="bg-red-50 border border-red-200 text-red-700 p-2.5 rounded-xl text-xs flex items-center gap-1.5">
+                        <AlertTriangle size={14} className="shrink-0" />
+                        <span>{ragError}</span>
+                      </div>
+                    )}
+
+                    {ragResult && (
+                      <div className="bg-white border border-slate-200 rounded-2xl p-3 space-y-2">
+                        <div className="flex items-center justify-between">
+                          <span className="text-[10px] font-bold uppercase text-slate-400">
+                            Strategy: {ragResult.strategy} ({ragResult.retrievalPath})
+                          </span>
+                          <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                            ragResult.confidence === "high" ? "bg-emerald-100 text-emerald-800" :
+                            ragResult.confidence === "medium" ? "bg-blue-100 text-blue-800" : "bg-slate-100 text-slate-700"
+                          }`}>
+                            Confidence: {ragResult.confidence}
+                          </span>
+                        </div>
+                        <p className="text-slate-800 text-xs leading-relaxed whitespace-pre-wrap font-medium">
+                          {ragResult.answer}
+                        </p>
+                        {ragResult.citations && ragResult.citations.length > 0 && (
+                          <div className="pt-2 border-t border-slate-100">
+                            <span className="text-[10px] font-bold text-slate-400 block mb-1">
+                              Citations ({ragResult.citations.length}):
+                            </span>
+                            <div className="space-y-1">
+                              {ragResult.citations.map((c, i) => (
+                                <div key={i} className="text-[11px] bg-slate-50 p-2 rounded-lg border border-slate-200/60">
+                                  <div className="flex justify-between font-semibold text-slate-700">
+                                    <span>Doc {c.documentId} (p. {c.pageNumber})</span>
+                                    <span>{c.clinicalDate || c.clinicalYear || "Date N/A"}</span>
+                                  </div>
+                                  {c.snippet && <p className="text-slate-500 mt-0.5 text-[10px] italic">"{c.snippet}"</p>}
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>

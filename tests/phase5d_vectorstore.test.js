@@ -809,11 +809,24 @@ async function runTestSuite() {
     // ------------------------------------------------------------------------
     // TEST-P5D-31: No browser/public endpoint exposes vectorstore access
     // ------------------------------------------------------------------------
-    const ragProxyRes = await makeRequest("POST", "/api/rag/query", { query: "my medical history" });
-    if (ragProxyRes.status === 501 && ragProxyRes.body?.error?.code === "NOT_IMPLEMENTED") {
-      recordTest("TEST-P5D-31", "No browser/public endpoint exposes vectorstore access", "PASS", "Public /api/rag/query strictly guarded / 501; no direct vectorstore access");
+    // 1. Missing clinical context is rejected with 400 VALIDATION_ERROR
+    const missingCtxRes = await makeRequest("POST", "/api/rag/query", { query: "my medical history" });
+    const missingCtxBlocked = (missingCtxRes.status === 400 && missingCtxRes.body?.error?.code === "VALIDATION_ERROR");
+
+    // 2. Direct patientUid vectorstore access attempt from browser is rejected with 400 VALIDATION_ERROR
+    const rawUidRes = await makeRequest("POST", "/api/rag/query", { patientUid: PATIENT_A, query: "my medical history" });
+    const rawUidBlocked = (rawUidRes.status === 400 && rawUidRes.body?.error?.code === "VALIDATION_ERROR");
+
+    // 3. Unauthenticated access with clinical context is rejected with 401 RAG_AUTH_REQUIRED
+    const unauthRes = await makeRequest("POST", "/api/rag/query", { encounterId: "ENC-5D-A1", query: "my medical history" });
+    const unauthBlocked = (unauthRes.status === 401 && unauthRes.body?.error?.code === "RAG_AUTH_REQUIRED");
+
+    if (missingCtxBlocked && rawUidBlocked && unauthBlocked) {
+      recordTest("TEST-P5D-31", "No browser/public endpoint exposes vectorstore access", "PASS",
+        "Public /api/rag/query strictly guarded: missing context (400), raw patientUid (400), and unauthenticated (401) all rejected");
     } else {
-      recordTest("TEST-P5D-31", "No browser/public endpoint exposes vectorstore access", "FAIL", JSON.stringify(ragProxyRes));
+      recordTest("TEST-P5D-31", "No browser/public endpoint exposes vectorstore access", "FAIL",
+        `MissingCtx: ${missingCtxRes.status} ${missingCtxRes.body?.error?.code}, RawUid: ${rawUidRes.status} ${rawUidRes.body?.error?.code}, Unauth: ${unauthRes.status} ${unauthRes.body?.error?.code}`);
     }
 
     // ------------------------------------------------------------------------
