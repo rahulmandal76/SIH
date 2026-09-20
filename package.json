@@ -26,7 +26,8 @@
     "test:phase5e": "node tests/phase5e_rag.test.js",
     "test:phase5e:py": "python -m unittest tests/test_phase5e_rag.py",
     "test:phase5f": "node tests/phase5f_gateway.test.js",
-    "test:all": "node tests/phase2_database.test.js && node tests/phase3_gateway.test.js && node tests/phase4_identity.test.js && node tests/phase5_interview.test.js && node tests/phase5b_documents.test.js && node tests/phase5c_facts.test.js && node tests/phase5d_vectorstore.test.js && node tests/phase5e_rag.test.js && node tests/phase5f_gateway.test.js"
+    "test:phase5g": "node tests/phase5g_workspace.test.js",
+    "test:all": "node tests/phase2_database.test.js && node tests/phase3_gateway.test.js && node tests/phase4_identity.test.js && node tests/phase5_interview.test.js && node tests/phase5b_documents.test.js && node tests/phase5c_facts.test.js && node tests/phase5d_vectorstore.test.js && node tests/phase5e_rag.test.js && node tests/phase5f_gateway.test.js && node tests/phase5g_workspace.test.js"
   },
   "keywords": [
     "healthcare",
