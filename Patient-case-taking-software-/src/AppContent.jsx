@@ -17,6 +17,7 @@ import { DoctorDashboardPage } from "./pages/DoctorDashboardPage";
 import { AyushIntakePage } from "./pages/AyushIntakePage";
 import { ArchitecturePage } from "./pages/ArchitecturePage";
 import { SecurityPage } from "./pages/SecurityPage";
+import { LoginPage } from "./pages/LoginPage";
 
 export const AppContent = () => {
   const { activeTab } = useDemo();
@@ -37,6 +38,7 @@ export const AppContent = () => {
         {activeTab === "ocr-results" && <OCRResultsPage />}
         {activeTab === "summary" && <ClinicalSummaryPage />}
         {activeTab === "doctor" && <DoctorDashboardPage />}
+        {activeTab === "login" && <LoginPage />}
         {activeTab === "ayush" && <AyushIntakePage />}
         {activeTab === "architecture" && <ArchitecturePage />}
         {activeTab === "security" && <SecurityPage />}

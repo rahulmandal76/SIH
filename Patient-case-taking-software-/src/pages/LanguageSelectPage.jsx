@@ -17,7 +17,7 @@ export const LanguageSelectPage = () => {
   ];
 
   const handleContinue = () => {
-    if (isDemoMode) nextDemoStep(); else setActiveTab("auth");
+    if (isDemoMode) nextDemoStep(); else setActiveTab("consent");
   };
 
   const handleReadAloud = () => {

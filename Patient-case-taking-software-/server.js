@@ -488,6 +488,8 @@ app.post("/api/auth/login", async (req, res) => {
     resetFailedLogin(throttleKey);
 
     const sessionToken = createUserSession(user);
+    res.clearCookie("ms_encounter_session", { path: "/" });
+    res.clearCookie("ms_kiosk_device", { path: "/" });
     res.cookie("ms_user_session", sessionToken, {
       httpOnly: true,
       sameSite: "lax",

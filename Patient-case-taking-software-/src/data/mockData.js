@@ -142,7 +142,7 @@ export const mockPatientQueue = [
 
 export const mockSampleDocuments = [
   {
-    id: "doc-1",
+    id: "DOC-E2E-001",
     title: "OPD Prescription - General Medicine",
     date: "12 Aug 2026",
     visitDate: "12 Aug 2026",

@@ -1,4 +1,4 @@
-name: Phase 11 CI Build & Test
+name: CI Build & Test
 
 on:
   push:
@@ -68,6 +68,14 @@ jobs:
       - name: Run Python Tests
         run: |
           python -m unittest tests/test_phase5e_rag.py
+
+      - name: Install Playwright Browsers
+        run: |
+          npx playwright install --with-deps chromium
+
+      - name: Run Playwright Browser E2E Tests
+        run: |
+          npm run test:e2e:browser
 
       - name: Build Production Frontend
         run: |

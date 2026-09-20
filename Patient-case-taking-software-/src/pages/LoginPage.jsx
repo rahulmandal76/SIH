@@ -16,7 +16,7 @@ import {
   FileCheck
 } from "lucide-react";
 
-export const LoginPage = () => {
+export const LoginPage = ({ initialRole = "doctor" }) => {
   const {
     setUserRole,
     switchRole,
@@ -26,7 +26,8 @@ export const LoginPage = () => {
   } = useDemo();
 
   // Active Login Tab: "patient" or "doctor"
-  const [loginRole, setLoginRole] = useState("patient");
+  const [loginRole, setLoginRole] = useState(initialRole);
+  const [loginSuccessMsg, setLoginSuccessMsg] = useState("");
 
   // Patient Login Form State
   const [patientAuthType, setPatientAuthType] = useState("walkin"); // "abha" or "walkin"
@@ -39,7 +40,7 @@ export const LoginPage = () => {
 
   // Doctor Login Form State
   const [doctorId, setDoctorId] = useState("dr.sharma@hospital.gov.in");
-  const [doctorPin, setDoctorPin] = useState("123456");
+  const [doctorPin, setDoctorPin] = useState("DoctorSecure123!");
   const [doctorChamber, setDoctorChamber] = useState("OPD Chamber #04 - General Medicine");
   const [loginErrorMsg, setLoginErrorMsg] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -369,7 +370,7 @@ export const LoginPage = () => {
               type="button"
               onClick={() => {
                 setDoctorId("dr.sharma@hospital.gov.in");
-                setDoctorPin("123456");
+                setDoctorPin("DoctorSecure123!");
                 setDoctorChamber("OPD Chamber #04 - General Medicine");
               }}
               className="text-[11px] font-bold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 px-3 py-1.5 rounded-xl transition cursor-pointer"

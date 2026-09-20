@@ -51,3 +51,7 @@ Desktop.ini
 prisma/dev.db
 # Runtime upload data
 data/
+
+# Playwright
+test-results/
+playwright-report/

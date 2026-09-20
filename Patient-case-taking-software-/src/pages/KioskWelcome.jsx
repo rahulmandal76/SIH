@@ -94,8 +94,7 @@ export const KioskWelcome = () => {
             <div className="flex flex-wrap items-center gap-3">
               <button
                 onClick={() => {
-                  switchRole("doctor");
-                  setActiveTab("doctor");
+                  setActiveTab("login");
                 }}
                 className="bg-white hover:bg-slate-50 border border-slate-300 text-slate-800 font-bold py-3 px-5 rounded-xl flex items-center gap-2 transition cursor-pointer text-xs shadow-2xs hover:border-slate-400"
               >

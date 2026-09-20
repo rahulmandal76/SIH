@@ -179,8 +179,8 @@ export function validateBrowserRagQuery(req) {
 
 // ─── 2. Authentication & Clinical Authorization ──────────────────────────────
 export async function authorizeAndResolvePatient(prisma, req, { encounterId, careRelationshipId }) {
-  // Reject patient encounter and device terminal sessions explicitly
-  if (req.device || req.encounterSession) {
+  // Reject unauthenticated patient encounter and device terminal sessions explicitly
+  if (!req.user && (req.device || req.encounterSession)) {
     return {
       authorized: false,
       status: 403,
