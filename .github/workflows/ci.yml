@@ -45,11 +45,21 @@ jobs:
       - name: Install System OCR Dependencies (Tesseract & Devanagari)
         run: |
           sudo apt-get update
-          sudo apt-get install -y tesseract-ocr tesseract-ocr-hin
+          sudo apt-get install -y tesseract-ocr tesseract-ocr-hin fonts-deva fonts-lohit-deva
           tesseract --version
           tesseract --list-langs
           tesseract --list-langs | grep eng
           tesseract --list-langs | grep hin
+          # Provide Devanagari font for test image generation matching Windows font paths
+          DEVA_FONT=$(find /usr/share/fonts -name "*Deva*.ttf" -o -name "*deva*.ttf" -o -name "*Lohit*.ttf" | head -n 1)
+          if [ -n "$DEVA_FONT" ]; then
+            echo "Found Devanagari font: $DEVA_FONT"
+            cp "$DEVA_FONT" 'C:\Windows\Fonts\Nirmala.ttf'
+            cp "$DEVA_FONT" 'C:\Windows\Fonts\mangal.ttf'
+            mkdir -p "Patient-case-taking-software-"
+            cp "$DEVA_FONT" Patient-case-taking-software-/'C:\Windows\Fonts\Nirmala.ttf' 2>/dev/null || true
+            cp "$DEVA_FONT" Patient-case-taking-software-/'C:\Windows\Fonts\mangal.ttf' 2>/dev/null || true
+          fi
 
       - name: Run Node Integration Test Suite
         run: |
