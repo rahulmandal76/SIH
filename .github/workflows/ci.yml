@@ -31,7 +31,7 @@ jobs:
 
       - name: Install Python Dependencies (RAG Service)
         run: |
-          pip install -r services/rag_service/requirements.txt
+          pip install -r services/rag_service/requirements.txt httpx
 
       - name: Generate Prisma Client (SQLite local tests)
         run: |
