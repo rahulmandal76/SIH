@@ -1,0 +1,26 @@
+FROM node:22.14-alpine
+
+WORKDIR /app
+
+# Set production environment
+ENV NODE_ENV=production
+
+# Install dependencies
+COPY package*.json ./
+COPY Patient-case-taking-software-/package*.json ./Patient-case-taking-software-/
+COPY Patient-case-taking-software-/prisma ./Patient-case-taking-software-/prisma/
+
+# Install and generate Prisma Client
+RUN cd Patient-case-taking-software- && npm ci && npx prisma generate
+
+# Copy application code
+COPY Patient-case-taking-software-/ ./Patient-case-taking-software-/
+COPY docs/ ./docs/
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+  CMD wget --no-verbose --tries=1 --spider http://localhost:5000/api/health/live || exit 1
+
+EXPOSE 5000
+
+CMD ["node", "Patient-case-taking-software-/server.js"]

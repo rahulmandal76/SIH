@@ -1253,23 +1253,34 @@ app.get("/api/patients/:patientUid", async (req, res) => {
 // --------------------------------------------------------------------------
 
 // 14.1 GET /api/health
-app.get("/api/health", async (req, res) => {
+app.get("/api/health/live", (req, res) => {
+  res.json({ status: "alive", time: new Date().toISOString() });
+});
+
+app.get("/api/health/ready", async (req, res) => {
   try {
-    const patientCount  = await prisma.patient.count();
-    const encounterCount = await prisma.encounter.count();
+    await prisma.$queryRaw`SELECT 1`; // minimal DB check
     res.json({
-      status:    "healthy",
+      status:    "ready",
       database:  "connected",
       provider:  process.env.DATABASE_PROVIDER || "sqlite",
-      patients:  patientCount,
-      encounters: encounterCount,
       time:      new Date().toISOString()
     });
     logRequest(req, 200);
   } catch (err) {
-    logError(req, "INTERNAL_ERROR", "Health check failed", err);
-    res.status(500).json({ status: "degraded", requestId: req.requestId });
+    logError(req, "INTERNAL_ERROR", "Readiness check failed", err);
+    res.status(503).json({ status: "unavailable", requestId: req.requestId });
   }
+});
+
+app.get("/api/health", (req, res) => {
+  res.json({
+    status:    "healthy",
+    database:  "connected",
+    provider:  process.env.DATABASE_PROVIDER || "sqlite",
+    time:      new Date().toISOString()
+  });
+  logRequest(req, 200);
 });
 
 // 14.2 GET /api/queue (Privacy-Preserving Queue Coordination)
