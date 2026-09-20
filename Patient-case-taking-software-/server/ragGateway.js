@@ -454,6 +454,14 @@ export async function executeFastApiRagQuery({
         message: body?.detail?.message || "RAG query validation failed."
       };
     }
+    if (status === 502 || status === 503) {
+      return {
+        success: false,
+        status: 502,
+        error: "RAG_SERVICE_UNAVAILABLE",
+        message: body?.detail?.message || (typeof body?.detail === "string" ? body.detail : null) || "Internal RAG service is unavailable."
+      };
+    }
     if (status === 504) {
       return {
         success: false,
@@ -522,6 +530,7 @@ export function validateAndSanitizeFastApiResponse(rawData) {
   return {
     success: true,
     historyAvailable: Boolean(rawData.historyAvailable),
+    isNoHistory: rawData.isNoHistory !== undefined ? Boolean(rawData.isNoHistory) : !Boolean(rawData.historyAvailable),
     retrievalPath: String(rawData.retrievalPath || "auto"),
     strategy: String(rawData.strategy || "STANDARD_SEMANTIC"),
     answer: String(rawData.answer || ""),

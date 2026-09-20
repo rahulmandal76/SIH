@@ -93,6 +93,26 @@ def normalize_vectors(matrix: np.ndarray) -> np.ndarray:
     return (matrix / norms).astype("float32")
 
 
+def safe_replace(src: str, dst: str):
+    """Safely replace a file atomically, handling Windows PermissionError / file locks."""
+    try:
+        os.replace(src, dst)
+    except PermissionError:
+        import time
+        for _ in range(5):
+            time.sleep(0.05)
+            try:
+                if os.path.exists(dst):
+                    os.remove(dst)
+                os.replace(src, dst)
+                return
+            except PermissionError:
+                pass
+        if os.path.exists(dst):
+            os.remove(dst)
+        os.replace(src, dst)
+
+
 class PatientVectorStore:
     def __init__(
         self,
@@ -306,10 +326,10 @@ class PatientVectorStore:
                 os.fsync(f.fileno())
 
             # 5. Atomically replace target files
-            os.replace(tmp_index, target_index)
-            os.replace(tmp_chunks, target_chunks)
-            os.replace(tmp_meta, target_meta)
-            os.replace(tmp_manifest, target_manifest)
+            safe_replace(tmp_index, target_index)
+            safe_replace(tmp_chunks, target_chunks)
+            safe_replace(tmp_meta, target_meta)
+            safe_replace(tmp_manifest, target_manifest)
 
             logger.info(
                 f"Successfully committed atomic vector snapshot for patient {valid_uid} "
