@@ -121,7 +121,7 @@ export const AIInterviewPage = ({ onNavigate }) => {
     try {
       // 1. Initial turn: Start interview session if not yet initialized
       if (!sessionId) {
-        const startRes = await fetch("/api/intake/interview/start", {
+        let startRes = await fetch("/api/intake/interview/start", {
           method: "POST",
           headers: authHeaders,
           credentials: "include",
@@ -130,6 +130,55 @@ export const AIInterviewPage = ({ onNavigate }) => {
             language
           })
         });
+
+        // Self-Healing Encounter Session: if missing or expired, auto-provision and retry
+        if (startRes.status === 401) {
+          try {
+            const pName = patientData?.name || "Walk-in Patient";
+            const pAge = parseInt(patientData?.age, 10) || 30;
+            const pGender = patientData?.gender || "Male";
+            const pPhone = patientData?.phone || "9876543210";
+
+            const provRes = await fetch("/api/intake", {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                "X-Requested-With": "XMLHttpRequest"
+              },
+              credentials: "include",
+              body: JSON.stringify({
+                name: pName,
+                age: pAge,
+                gender: pGender,
+                phone: pPhone,
+                chiefComplaint: text
+              })
+            });
+
+            if (provRes.ok) {
+              const provData = await provRes.json();
+              if (provData.encounterId) {
+                setPatientData(prev => ({
+                  ...prev,
+                  encounterId: provData.encounterId,
+                  token: provData.token || prev.token
+                }));
+              }
+              // Retry interview start with established encounter session
+              startRes = await fetch("/api/intake/interview/start", {
+                method: "POST",
+                headers: authHeaders,
+                credentials: "include",
+                body: JSON.stringify({
+                  chiefComplaint: text,
+                  language
+                })
+              });
+            }
+          } catch (provErr) {
+            console.warn("[AIInterviewPage] Session auto-provision error:", provErr);
+          }
+        }
 
         if (startRes.ok) {
           const startData = await startRes.json();

@@ -76,8 +76,20 @@ export const DemoProvider = ({ children }) => {
     }
   };
 
-  // Fetch initial queue from Server API on load
+  // Bootstrap Kiosk Device Session & Fetch initial queue on load
   useEffect(() => {
+    // 1. Bootstrap Device Session for Kiosk (ms_device_session)
+    fetch("/api/auth/device", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Requested-With": "XMLHttpRequest"
+      },
+      credentials: "include",
+      body: JSON.stringify({ deviceId: "KIOSK-DEV-01" })
+    }).catch(e => console.warn("[DemoContext] Device bootstrap notice:", e.message));
+
+    // 2. Fetch initial queue from Server API
     const fetchQueue = async () => {
       try {
         const res = await fetch("/api/queue");

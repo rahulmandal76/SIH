@@ -51,6 +51,36 @@ export const PatientAuth = ({ onNavigate }) => {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
 
+  // Bootstrap Kiosk Device Session on mount (ms_device_session)
+  useEffect(() => {
+    fetch("/api/auth/device", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Requested-With": "XMLHttpRequest"
+      },
+      credentials: "include",
+      body: JSON.stringify({ deviceId: "KIOSK-DEV-01" })
+    }).catch(e => console.warn("[PatientAuth] Device bootstrap notice:", e.message));
+  }, []);
+
+  // Helper to ensure device session is active
+  const ensureDeviceSession = async () => {
+    try {
+      await fetch("/api/auth/device", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Requested-With": "XMLHttpRequest"
+        },
+        credentials: "include",
+        body: JSON.stringify({ deviceId: "KIOSK-DEV-01" })
+      });
+    } catch (e) {
+      console.warn("[PatientAuth] Device session check notice:", e.message);
+    }
+  };
+
   // Mobile Lookup Handler (Shared Family Support)
   const handleMobileLookup = async () => {
     if (!mobile || mobile.trim().length < 10) {
@@ -65,7 +95,8 @@ export const PatientAuth = ({ onNavigate }) => {
     setIsRegisteringNewMember(false);
 
     try {
-      const res = await fetch("/api/patients/lookup", {
+      await ensureDeviceSession();
+      let res = await fetch("/api/patients/lookup", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -74,6 +105,19 @@ export const PatientAuth = ({ onNavigate }) => {
         credentials: "include",
         body: JSON.stringify({ mobileNumber: mobile.trim() })
       });
+
+      if (res.status === 401) {
+        await ensureDeviceSession();
+        res = await fetch("/api/patients/lookup", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Requested-With": "XMLHttpRequest"
+          },
+          credentials: "include",
+          body: JSON.stringify({ mobileNumber: mobile.trim() })
+        });
+      }
 
       const data = await res.json();
       if (res.ok && data.found && data.candidates?.length > 0) {
@@ -102,11 +146,12 @@ export const PatientAuth = ({ onNavigate }) => {
     setIsSubmitting(true);
 
     const tokenNum = (latestToken + 1).toString();
+    await ensureDeviceSession();
 
     // 1. Existing candidate selected via lookupHandle
     if (selectedCandidate && lookupHandle) {
       try {
-        const encRes = await fetch("/api/encounters", {
+        let encRes = await fetch("/api/encounters", {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -120,35 +165,54 @@ export const PatientAuth = ({ onNavigate }) => {
           })
         });
 
-        const encData = await encRes.json();
-        const updated = {
-          ...patientData,
-          token: encData.token || tokenNum,
-          encounterId: encData.encounterId,
-          name: selectedCandidate.maskedName || "Patient",
-          age: selectedCandidate.age || 45,
-          gender: selectedCandidate.gender || "Male",
-          phone: mobile || selectedCandidate.maskedMobile,
-          abhaId: abhaInput.trim() || "not_configured"
-        };
-        setPatientData(updated);
-
-        if (onNavigate) {
-          onNavigate("/kiosk/consent");
-        } else if (isDemoMode) {
-          nextDemoStep();
-        } else {
-          setActiveTab("interview");
+        if (encRes.status === 401) {
+          await ensureDeviceSession();
+          encRes = await fetch("/api/encounters", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "X-Requested-With": "XMLHttpRequest"
+            },
+            credentials: "include",
+            body: JSON.stringify({
+              lookupHandle,
+              candidateId: selectedCandidate.candidateId,
+              chiefComplaint: "Self-service kiosk check-in"
+            })
+          });
         }
-        return;
+
+        const encData = await encRes.json();
+        if (encRes.ok && encData.encounterId) {
+          const updated = {
+            ...patientData,
+            token: encData.token || tokenNum,
+            encounterId: encData.encounterId,
+            name: selectedCandidate.fullName || selectedCandidate.maskedName || "Patient",
+            age: selectedCandidate.age || 45,
+            gender: selectedCandidate.gender || "Male",
+            phone: mobile || selectedCandidate.maskedMobile,
+            abhaId: abhaInput.trim() || "not_configured"
+          };
+          setPatientData(updated);
+
+          if (onNavigate) {
+            onNavigate("/kiosk/consent");
+          } else if (isDemoMode) {
+            nextDemoStep();
+          } else {
+            setActiveTab("interview");
+          }
+          return;
+        }
       } catch (err) {
-        // Fallback to local state if server offline
+        console.warn("[PatientAuth] Encounter creation notice:", err);
       }
     }
 
     // 2. New patient registration via registrationHandle
     try {
-      const regRes = await fetch("/api/patients", {
+      let regRes = await fetch("/api/patients", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -164,6 +228,26 @@ export const PatientAuth = ({ onNavigate }) => {
           abhaAddress: abhaAddress.trim() || undefined
         })
       });
+
+      if (regRes.status === 401) {
+        await ensureDeviceSession();
+        regRes = await fetch("/api/patients", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Requested-With": "XMLHttpRequest"
+          },
+          credentials: "include",
+          body: JSON.stringify({
+            fullName: name.trim() || "Walk-in Patient",
+            age: parseInt(age, 10) || 25,
+            gender: gender,
+            mobileNumber: mobile.trim() || undefined,
+            abhaNumber: abhaInput.trim() || undefined,
+            abhaAddress: abhaAddress.trim() || undefined
+          })
+        });
+      }
 
       const regData = await regRes.json();
       if (regRes.ok && regData.registrationHandle) {
@@ -182,52 +266,100 @@ export const PatientAuth = ({ onNavigate }) => {
         });
 
         const encData = await encRes.json();
-        const updated = {
-          ...patientData,
-          token: encData.token || tokenNum,
-          encounterId: encData.encounterId,
-          patientId: regData.patientId,
-          name: name.trim() || "Patient",
-          age: parseInt(age, 10) || 25,
-          gender: gender,
-          phone: mobile,
-          abhaId: abhaInput.trim() || "not_configured"
-        };
-        setPatientData(updated);
+        if (encRes.ok && encData.encounterId) {
+          const updated = {
+            ...patientData,
+            token: encData.token || tokenNum,
+            encounterId: encData.encounterId,
+            patientId: regData.patientId,
+            name: name.trim() || "Patient",
+            age: parseInt(age, 10) || 25,
+            gender: gender,
+            phone: mobile,
+            abhaId: abhaInput.trim() || "not_configured"
+          };
+          setPatientData(updated);
 
-        if (onNavigate) {
-          onNavigate("/kiosk/consent");
-        } else if (isDemoMode) {
-          nextDemoStep();
-        } else {
-          setActiveTab("interview");
+          if (onNavigate) {
+            onNavigate("/kiosk/consent");
+          } else if (isDemoMode) {
+            nextDemoStep();
+          } else {
+            setActiveTab("interview");
+          }
+          return;
         }
-        return;
       }
     } catch (err) {
-      // Fallback for standalone demo mode
-    } finally {
-      setIsSubmitting(false);
+      console.warn("[PatientAuth] Direct registration notice:", err);
     }
 
-    // Default fallback
-    const updated = {
-      ...patientData,
-      token: tokenNum,
-      name: name.trim() || "Patient",
-      age: parseInt(age, 10) || 25,
-      gender: gender,
-      phone: mobile,
-      abhaId: abhaInput.trim() || "not_configured"
-    };
+    // 3. Fallback bridge: POST /api/intake directly to guarantee Encounter & ms_encounter_session
+    try {
+      const pName = selectedCandidate ? (selectedCandidate.fullName || selectedCandidate.maskedName) : (name.trim() || "Walk-in Patient");
+      const pAge = selectedCandidate ? (selectedCandidate.age || 45) : (parseInt(age, 10) || 25);
+      const pGender = selectedCandidate ? (selectedCandidate.gender || "Male") : gender;
+      const pPhone = mobile || (selectedCandidate ? selectedCandidate.maskedMobile : "9876543210");
 
-    setPatientData(updated);
-    if (onNavigate) {
-      onNavigate("/kiosk/consent");
-    } else if (isDemoMode) {
-      nextDemoStep();
-    } else {
-      setActiveTab("interview");
+      const intakeRes = await fetch("/api/intake", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Requested-With": "XMLHttpRequest"
+        },
+        credentials: "include",
+        body: JSON.stringify({
+          name: pName,
+          age: pAge,
+          gender: pGender,
+          phone: pPhone,
+          chiefComplaint: "Self-service kiosk intake"
+        })
+      });
+
+      const intakeData = await intakeRes.json().catch(() => ({}));
+      const updated = {
+        ...patientData,
+        token: intakeData.token || tokenNum,
+        encounterId: intakeData.encounterId,
+        patientId: intakeData.patientId,
+        name: pName,
+        age: pAge,
+        gender: pGender,
+        phone: pPhone,
+        abhaId: abhaInput.trim() || "not_configured"
+      };
+      setPatientData(updated);
+
+      if (onNavigate) {
+        onNavigate("/kiosk/consent");
+      } else if (isDemoMode) {
+        nextDemoStep();
+      } else {
+        setActiveTab("interview");
+      }
+    } catch (err) {
+      console.error("[PatientAuth] Final fallback error:", err);
+      // Local state fallback
+      const updated = {
+        ...patientData,
+        token: tokenNum,
+        name: name.trim() || "Patient",
+        age: parseInt(age, 10) || 25,
+        gender: gender,
+        phone: mobile,
+        abhaId: abhaInput.trim() || "not_configured"
+      };
+      setPatientData(updated);
+      if (onNavigate) {
+        onNavigate("/kiosk/consent");
+      } else if (isDemoMode) {
+        nextDemoStep();
+      } else {
+        setActiveTab("interview");
+      }
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
