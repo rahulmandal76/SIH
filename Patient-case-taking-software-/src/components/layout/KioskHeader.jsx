@@ -136,6 +136,7 @@ export const KioskHeader = ({ activeKioskRoute = "welcome", onNavigate }) => {
               aria-label="Select language"
             >
               <option value="English">English</option>
+              <option value="Hinglish">Hinglish (हिंग्लिश)</option>
               <option value="Hindi">हिंदी (Hindi)</option>
               <option value="Bengali">বাংলা (Bengali)</option>
               <option value="Marathi">मराठी (Marathi)</option>

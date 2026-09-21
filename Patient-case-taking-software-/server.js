@@ -1803,7 +1803,7 @@ function getUserSessionContext(req) {
 
 const IntakeInterviewStartSchema = z.object({
   chiefComplaint: z.string().max(1000).optional().default(""),
-  language: z.enum(["Hindi", "English"]).optional().default("Hindi")
+  language: z.enum(["Hindi", "English", "Hinglish"]).optional().default("Hindi")
 });
 
 const IntakeInterviewStepSchema = z.object({
@@ -1812,7 +1812,7 @@ const IntakeInterviewStepSchema = z.object({
   questionText: z.string().max(1000).optional(),
   answerText: z.string().max(1000).optional().default(""),
   action: z.enum(["answer", "skip", "unknown"]).optional().default("answer"),
-  language: z.enum(["Hindi", "English"]).optional().default("Hindi")
+  language: z.enum(["Hindi", "English", "Hinglish"]).optional().default("Hindi")
 });
 
 const IntakeInterviewEditSchema = z.object({

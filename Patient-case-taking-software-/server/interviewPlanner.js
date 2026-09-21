@@ -7,7 +7,7 @@ import { GoogleGenAI } from "@google/genai";
 export function getIntakeAiConfig() {
   return {
     provider: process.env.INTERVIEW_AI_PROVIDER || process.env.DOCUMENT_AI_PROVIDER || "gemini",
-    model: process.env.INTERVIEW_AI_MODEL || process.env.DOCUMENT_AI_MODEL || "gemini-flash-latest",
+    model: process.env.INTERVIEW_AI_MODEL || "gemini-3.8-flash",
     timeoutMs: parseInt(process.env.INTERVIEW_AI_TIMEOUT_MS || process.env.DOCUMENT_AI_TIMEOUT_MS || "15000", 10),
     maxRetries: parseInt(process.env.INTERVIEW_AI_MAX_RETRIES || "2", 10),
     apiKey: process.env.GEMINI_API_KEY || ""
@@ -303,6 +303,16 @@ export class InterviewPlanner {
     const remainingDomains = CLINICAL_DOMAINS.filter(d => !coveredDomains.includes(d));
     const targetDomain = this.selectNextDomain(complaintCategory, new Set(coveredDomains)) || "associated_symptoms";
 
+    const activeText = latestAnswer || chiefComplaint || "";
+    const isLatinScript = /^[a-zA-Z0-9\s.,!?'"()\-–—]+$/.test(activeText.trim());
+    const isHinglish = language === "Hinglish" || (language !== "English" && isLatinScript);
+
+    const languageInstruction = language === "English"
+      ? "English: Generate question and options in clear, empathetic clinical English."
+      : isHinglish
+        ? "Hinglish: The patient communicates in conversational Hinglish (Roman script). Ask the question and provide quick-tap options in natural, conversational Hinglish (Roman script, e.g. 'Aapko ulti jaisa kab se feel ho raha hai?')."
+        : "Hindi: The patient communicates in Hindi (Devanagari script). Ask the question and provide quick-tap options in natural, conversational Hindi using Devanagari script (e.g. 'यह उल्टी की समस्या कब से महसूस हो रही है?').";
+
     const systemInstruction = `You are the Gemini Clinical Intake AI for an intelligent hospital kiosk.
 Your task is to generate the single NEXT clinical question for a patient check-in interview.
 
@@ -316,7 +326,7 @@ CORE CLINICAL & ETHICAL RULES:
 7. Stay strictly within the defined clinical framework (focus on: duration_onset, severity_character, radiation_spread, aggravating_relieving, associated_symptoms, current_medications).
 8. Ask exactly ONE appropriate, concise, and empathetic next question at a time.
 9. Prefer continuity with the latest patient response (e.g. if the patient reports nausea or vomiting, focus your next clinical question directly on that reported symptom).
-10. Preserve the patient's language where appropriate (${language === "English" ? "English" : "natural conversational Hindi/Hinglish"}).
+10. LANGUAGE & SCRIPT INSTRUCTION: ${languageInstruction}
 11. Do not provide a diagnosis as if it were established.
 12. Do not convert AI inference into PATIENT_REPORTED information.
 
@@ -325,7 +335,7 @@ OUTPUT SCHEMA (JSON ONLY):
   "questionText": "Single clear next clinical question to ask the patient",
   "questionKey": "${targetDomain}",
   "clinicalDomain": "${targetDomain}",
-  "options": ["Up to 4 short contextual options for quick tap, or empty array []"]
+  "options": ["Up to 4 short contextual options for quick tap matching the patient's language style, or empty array []"]
 }
 DO NOT include any free-form 'reasoning' or chain-of-thought field in the response. Return strictly valid JSON.`;
 
@@ -344,20 +354,21 @@ DO NOT include any free-form 'reasoning' or chain-of-thought field in the respon
 - Clinically Relevant Domains Remaining: [${remainingDomains.join(", ")}]
 - Target Clinical Domain for this Turn: ${targetDomain}
 - Latest Patient Response (PATIENT_REPORTED): "${latestAnswer || chiefComplaint}"
-- Preferred Language: ${language}
+- Preferred Language Mode: ${isHinglish ? "Hinglish (Roman Script)" : language}
 
 FULL CONVERSATION HISTORY TO DATE:
 ${formattedHistory || `[Turn 0] Patient Answer (PATIENT_REPORTED): "${chiefComplaint}"`}
 
 TASK:
-Based on the patient's actual reported statements, generate the single NEXT question within the clinical framework targeting ${targetDomain}. Ensure continuity with the latest patient statement.`;
+Based on the patient's actual reported statements, generate the single NEXT question within the clinical framework targeting ${targetDomain}. Ensure continuity with the latest patient statement and match the patient's language (${isHinglish ? "conversational Hinglish in Roman script" : language}).`;
 
     try {
       let responseText = "";
+
       if (this.genAiClient) {
         // Injected mock client for tests (requirement 7)
         const res = await this.genAiClient.models.generateContent({
-          model: config.model,
+          model: config.model || "gemini-3.8-flash",
           contents: [{ text: userPrompt }],
           config: {
             systemInstruction,
@@ -373,17 +384,46 @@ Based on the patient's actual reported statements, generate the single NEXT ques
           throw err;
         }
 
-        const ai = new GoogleGenAI({ apiKey: config.apiKey });
-        const res = await ai.models.generateContent({
-          model: config.model,
-          contents: [{ text: userPrompt }],
-          config: {
-            systemInstruction,
-            temperature: 0.2,
-            responseMimeType: "application/json"
+        const candidateModels = [
+          config.model || "gemini-3.8-flash",
+          "gemini-3.8-flash",
+          "gemini-flash-latest"
+        ];
+        const modelsToTry = [...new Set(candidateModels)];
+
+        let lastError = null;
+        for (const currentModel of modelsToTry) {
+          for (let attempt = 1; attempt <= 2; attempt++) {
+            try {
+              const ai = new GoogleGenAI({ apiKey: config.apiKey });
+              const res = await ai.models.generateContent({
+                model: currentModel,
+                contents: [{ text: userPrompt }],
+                config: {
+                  systemInstruction,
+                  temperature: 0.2,
+                  responseMimeType: "application/json"
+                }
+              });
+              responseText = res.text || "{}";
+              lastError = null;
+              break;
+            } catch (err) {
+              lastError = err;
+              const isSpike = err.status === 503 || err.message?.includes("503") || err.message?.includes("high demand") || err.message?.includes("temporary");
+              if (isSpike && attempt < 2) {
+                await new Promise(r => setTimeout(r, 1200));
+                continue;
+              }
+              break;
+            }
           }
-        });
-        responseText = res.text || "{}";
+          if (responseText) break;
+        }
+
+        if (!responseText && lastError) {
+          throw lastError;
+        }
       }
 
       const cleaned = responseText.replace(/```json/gi, "").replace(/```/g, "").trim();

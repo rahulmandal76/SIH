@@ -71,7 +71,9 @@ export const AIInterviewPage = ({ onNavigate }) => {
       sender: "ai",
       text: language === "English"
         ? `Hello ${patientData?.name ? patientData.name.split(" ")[0] : ""}! What health concerns are bringing you in today? Please describe your main symptoms.`
-        : `नमस्ते ${patientData?.name ? patientData.name.split(" ")[0] : ""} जी! आज आपको क्या तकलीफ है? कृपया अपनी मुख्य परेशानी बताइए।`,
+        : language === "Hinglish"
+          ? `Namaste ${patientData?.name ? patientData.name.split(" ")[0] : ""} ji! Aaj aapko kya takleef hai? Kripya apni mukhya pareshani batayein.`
+          : `नमस्ते ${patientData?.name ? patientData.name.split(" ")[0] : ""} जी! आज आपको क्या तकलीफ है? कृपया अपनी मुख्य परेशानी बताइए।`,
       time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
     }
   ]);
@@ -97,8 +99,8 @@ export const AIInterviewPage = ({ onNavigate }) => {
 
     const timeStr = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
     let patientDisplay = text;
-    if (actionType === "skip") patientDisplay = language === "English" ? "Skip" : "छोड़ें (Skip)";
-    else if (actionType === "unknown") patientDisplay = language === "English" ? "Don't know" : "पता नहीं (Pata Nahi / Don't Know)";
+    if (actionType === "skip") patientDisplay = language === "English" ? "Skip" : language === "Hinglish" ? "Chhodein (Skip)" : "छोड़ें (Skip)";
+    else if (actionType === "unknown") patientDisplay = language === "English" ? "Don't know" : language === "Hinglish" ? "Pata nahi (Don't know)" : "पता नहीं (Pata Nahi / Don't Know)";
 
     const updatedConv = [...conversation, { sender: "patient", text: patientDisplay, time: timeStr }];
     setConversation(updatedConv);
