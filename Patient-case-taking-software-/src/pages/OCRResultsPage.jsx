@@ -21,7 +21,6 @@ import {
   HelpCircle,
   HeartPulse
 } from "lucide-react";
-import { mockSampleDocuments } from "../data/mockData";
 import { jsPDF } from "jspdf";
 
 export const OCRResultsPage = () => {
@@ -34,7 +33,13 @@ export const OCRResultsPage = () => {
     patientData
   } = useDemo();
 
-  const doc = activeScannedDoc || mockSampleDocuments[0];
+  const doc = activeScannedDoc || {
+    title: "Prescription Scan",
+    date: null,
+    doctor: null,
+    hospital: null,
+    extractedData: { diagnosis: null, medications: [], investigations: [], problems: [] }
+  };
   const [blobUrl, setBlobUrl] = useState(null);
 
   // Convert Base64 data URL to reliable Blob URL for seamless browser viewing
@@ -66,25 +71,24 @@ export const OCRResultsPage = () => {
         const tempDoc = new jsPDF();
         tempDoc.setFont("helvetica", "bold");
         tempDoc.setFontSize(14);
-        tempDoc.text(doc.hospital || "CIVIL HOSPITAL OPD - MEDICAL RECORD", 14, 16);
+        tempDoc.text(doc.hospital || "CLINICAL DOCUMENT - MEDICAL RECORD", 14, 16);
         tempDoc.setFontSize(9);
         tempDoc.setFont("helvetica", "normal");
-        tempDoc.text(`Document: ${doc.title || "Prescription Scan"} | Date: ${doc.date || "Today"}`, 14, 22);
-        tempDoc.text(`Physician: ${doc.doctor || "Dr. K. S. Verma (MD)"}`, 14, 28);
-        tempDoc.text(`Clinical Diagnosis: ${doc.extractedData?.diagnosis || "Routine OPD"}`, 14, 38);
+        tempDoc.text(`Document: ${doc.title || "Prescription Scan"} | Date: ${doc.date || "Not Specified"}`, 14, 22);
+        tempDoc.text(`Physician: ${doc.doctor || "Not Specified"}`, 14, 28);
+        tempDoc.text(`Clinical Diagnosis: ${doc.extractedData?.diagnosis || "Not Specified"}`, 14, 38);
 
-        const problems = doc.extractedData?.problems || [
-          "Chest discomfort on brisk exertion",
-          "Elevated Blood Pressure readings: 148/92 mmHg"
-        ];
-        tempDoc.setFont("helvetica", "bold");
-        tempDoc.text("Reported Problems & Symptoms:", 14, 48);
-        tempDoc.setFont("helvetica", "normal");
-        problems.forEach((p, idx) => {
-          tempDoc.text(`• ${p}`, 18, 55 + idx * 7);
-        });
+        const problems = doc.extractedData?.problems || [];
+        if (problems.length > 0) {
+          tempDoc.setFont("helvetica", "bold");
+          tempDoc.text("Reported Problems & Symptoms:", 14, 48);
+          tempDoc.setFont("helvetica", "normal");
+          problems.forEach((p, idx) => {
+            tempDoc.text(`• ${p}`, 18, 55 + idx * 7);
+          });
+        }
 
-        const probY = 55 + problems.length * 7 + 6;
+        const probY = problems.length > 0 ? (55 + problems.length * 7 + 6) : 48;
         if (doc.extractedData?.investigations?.length > 0) {
           tempDoc.setFont("helvetica", "bold");
           tempDoc.text("Diagnostic Investigations & Tests:", 14, probY);
@@ -121,9 +125,9 @@ export const OCRResultsPage = () => {
         tempDoc.text(doc.title || "Medical Prescription", 14, 16);
         tempDoc.setFontSize(9);
         tempDoc.setFont("helvetica", "normal");
-        tempDoc.text(`Hospital: ${doc.hospital || "Civil Hospital"}`, 14, 24);
-        tempDoc.text(`Doctor: ${doc.doctor || "Dr. Sharma"}`, 14, 30);
-        tempDoc.text(`Diagnosis: ${doc.extractedData?.diagnosis || "OPD"}`, 14, 40);
+        tempDoc.text(`Hospital: ${doc.hospital || "Not Specified"}`, 14, 24);
+        tempDoc.text(`Doctor: ${doc.doctor || "Not Specified"}`, 14, 30);
+        tempDoc.text(`Diagnosis: ${doc.extractedData?.diagnosis || "Not Specified"}`, 14, 40);
         tempDoc.save(`${doc.title || "Medical_Document"}.pdf`);
       }
     } catch (e) {

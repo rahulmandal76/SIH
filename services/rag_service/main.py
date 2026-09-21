@@ -45,9 +45,11 @@ _INTERNAL_SECRET = os.environ.get("RAG_SERVICE_INTERNAL_TOKEN", "")
 _RAG_TIMEOUT_MS = int(os.environ.get("RAG_TIMEOUT_MS", "8000"))
 _RAG_TIMEOUT_S = _RAG_TIMEOUT_MS / 1000.0
 _MAX_BODY_BYTES = 2 * 1024 * 1024  # 2 MB
-_VECTOR_BASE_DIR = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "..", "..", "vector_index")
+_VECTOR_BASE_DIR = os.environ.get(
+    "VECTOR_INDEX_ROOT",
+    os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "storage", "vector_index"))
 )
+os.makedirs(_VECTOR_BASE_DIR, exist_ok=True)
 
 from services.rag_service.database import get_database_client, parse_database_config
 

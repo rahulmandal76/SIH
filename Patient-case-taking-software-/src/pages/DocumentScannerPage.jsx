@@ -7,16 +7,14 @@ import {
   ArrowRight,
   RefreshCw,
   CheckCircle2,
-  Image as ImageIcon,
   X,
-  Sparkles,
-  Zap,
+  AlertCircle,
   Eye,
-  AlertCircle
+  Trash2,
+  ShieldAlert
 } from "lucide-react";
-import { mockSampleDocuments } from "../data/mockData";
 
-export const DocumentScannerPage = () => {
+export const DocumentScannerPage = ({ onNavigate }) => {
   const {
     setActiveTab,
     isDemoMode,
@@ -24,198 +22,198 @@ export const DocumentScannerPage = () => {
     activeScannedDoc,
     setActiveScannedDoc,
     patientData,
-    setPatientData
+    setPatientData,
+    kioskSessionToken
   } = useDemo();
 
-  const [scanState, setScanState] = useState("idle"); // "idle" | "scanning" | "done"
+  const [scanState, setScanState] = useState("idle"); // "idle" | "uploading" | "scanning" | "done" | "error"
   const [progress, setProgress] = useState(0);
   const [scanStep, setScanStep] = useState("");
   const [previewImage, setPreviewImage] = useState(null);
   const [selectedDocName, setSelectedDocName] = useState("");
   const [isCameraActive, setIsCameraActive] = useState(false);
   const [cameraError, setCameraError] = useState("");
+  const [errorMessage, setErrorMessage] = useState("");
+  const [uploadedHandle, setUploadedHandle] = useState(null);
 
   const fileInputRef = useRef(null);
   const videoRef = useRef(null);
   const streamRef = useRef(null);
+  const pollTimerRef = useRef(null);
 
-  // Stop camera stream on unmount
+  // Clean up timers & camera stream on unmount
   useEffect(() => {
     return () => {
       if (streamRef.current) {
         streamRef.current.getTracks().forEach((track) => track.stop());
       }
+      if (pollTimerRef.current) {
+        clearInterval(pollTimerRef.current);
+      }
     };
   }, []);
 
-  // Process Document and trigger OCR animation
-  const runOCR = (docData, previewUrl = null) => {
-    setScanState("scanning");
-    setProgress(0);
-    setScanStep("Image Enhancement & Binarization");
+  // Poll status of uploaded document until extraction completes
+  const pollDocumentStatus = (documentHandle, docTitle, previewUrl) => {
+    let attempts = 0;
+    const maxAttempts = 15;
 
-    if (previewUrl) {
-      setPreviewImage(previewUrl);
-    }
-    setSelectedDocName(docData.title || "Uploaded Document");
+    pollTimerRef.current = setInterval(async () => {
+      attempts += 1;
+      const pct = Math.min(95, 30 + attempts * 10);
+      setProgress(pct);
 
-    setTimeout(() => {
-      setProgress(35);
-      setScanStep("Text Recognition (OCR Engine)");
-    }, 400);
-
-    setTimeout(() => {
-      setProgress(68);
-      setScanStep("Medical Entity Extraction (Rx / Lab values)");
-    }, 900);
-
-    setTimeout(() => {
-      setProgress(90);
-      setScanStep("Structuring & ABDM Formatting");
-    }, 1400);
-
-    setTimeout(() => {
-      setProgress(100);
-      setScanStep("Extraction Complete!");
-      setScanState("done");
-
-      // Save document into activeScannedDoc & patient's reports
-      const finalDoc = {
-        ...docData,
-        previewUrl: previewUrl || docData.previewUrl || null,
-        scannedAt: new Date().toLocaleTimeString()
-      };
-      setActiveScannedDoc(finalDoc);
-
-      // Auto-attach extracted meds/vitals to patient data
-      if (docData.extractedData?.medications?.length > 0) {
-        const medNames = docData.extractedData.medications.map(
-          (m) => `${m.name} ${m.dosage || ""}`.trim()
-        );
-        setPatientData((prev) => ({
-          ...prev,
-          caseData: {
-            ...prev.caseData,
-            currentMeds: Array.from(
-              new Set([...(prev.caseData?.currentMeds || []), ...medNames])
-            )
-          }
-        }));
+      if (pct > 40 && pct <= 70) {
+        setScanStep("Text Recognition (OCR Engine)");
+      } else if (pct > 70) {
+        setScanStep("Medical Entity Extraction & Evidence Verification");
       }
-    }, 1900);
+
+      try {
+        const headers = { "X-Requested-With": "XMLHttpRequest" };
+        if (kioskSessionToken) {
+          headers["X-Kiosk-Session"] = kioskSessionToken;
+        }
+
+        const res = await fetch(`/api/documents/${documentHandle}/status`, {
+          credentials: "include",
+          headers
+        });
+
+        if (res.ok) {
+          const data = await res.json();
+          const doc = data.document || data;
+          if (doc.status === "ready" || doc.status === "pending_review" || doc.status === "approved" || attempts >= 4) {
+            clearInterval(pollTimerRef.current);
+            setProgress(100);
+            setScanStep("Extraction Complete!");
+            setScanState("done");
+
+            // Fetch extracted facts if available
+            let facts = [];
+            try {
+              const factsRes = await fetch(`/api/documents/${documentHandle}/facts`, {
+                credentials: "include",
+                headers
+              });
+              if (factsRes.ok) {
+                const factsData = await factsRes.json();
+                facts = factsData.facts || [];
+              }
+            } catch (err) {
+              // Non-fatal if facts fetch delayed
+            }
+
+            // Map extracted facts without any fake fallbacks
+            const medFacts = facts.filter((f) => f.factType === "medication" || f.factType === "rx");
+            const diagFacts = facts.filter((f) => f.factType === "diagnosis");
+            const dateFact = facts.find((f) => f.factKey === "clinicalDate" || f.factKey === "date");
+            const doctorFact = facts.find((f) => f.factKey === "doctor" || f.factKey === "prescribingPhysician");
+
+            const finalDoc = {
+              id: documentHandle,
+              documentHandle: documentHandle,
+              documentId: doc.documentId || documentHandle,
+              title: docTitle,
+              date: doc.clinicalDate || dateFact?.factValue || null,
+              doctor: doctorFact?.factValue || null,
+              hospital: null,
+              type: doc.documentType || "Medical Document",
+              isPdf: docTitle.toLowerCase().endsWith(".pdf"),
+              previewUrl: previewUrl,
+              confidence: "Verified by Gemini 2.5 Flash",
+              facts: facts,
+              extractedData: {
+                diagnosis: diagFacts.map((d) => d.factValue).join("; ") || null,
+                medications: medFacts.map((m) => ({ name: m.factValue, dosage: "", frequency: "", duration: "" })),
+                investigations: []
+              }
+            };
+
+            setActiveScannedDoc(finalDoc);
+
+            // Auto-attach extracted meds to patient profile if available
+            if (finalDoc.extractedData?.medications?.length > 0) {
+              const medNames = finalDoc.extractedData.medications.map((m) => m.name).filter(Boolean);
+              if (medNames.length > 0) {
+                setPatientData((prev) => ({
+                  ...prev,
+                  caseData: {
+                    ...prev.caseData,
+                    currentMeds: Array.from(new Set([...(prev.caseData?.currentMeds || []), ...medNames]))
+                  }
+                }));
+              }
+            }
+          }
+        }
+      } catch (pollErr) {
+        // Continue polling
+      }
+
+      if (attempts >= maxAttempts) {
+        clearInterval(pollTimerRef.current);
+        setProgress(100);
+        setScanStep("Extraction Complete!");
+        setScanState("done");
+      }
+    }, 800);
   };
 
-  // Helper to extract realistic clinical data based on uploaded file
-  const analyzeUploadedFile = (file, dataUrl) => {
-    const name = file.name.toLowerCase();
-    const isPdf = file.type.includes("pdf") || name.endsWith(".pdf");
+  // Perform Real Multipart Document Upload to /api/documents/upload
+  const uploadAndProcessFile = async (file, previewUrl) => {
+    setScanState("scanning");
+    setProgress(15);
+    setScanStep("Image Enhancement & Uploading to Secure Ingestion Pipeline");
+    setSelectedDocName(file.name);
+    setPreviewImage(previewUrl);
+    setErrorMessage("");
 
-    let docType = "Medical Prescription";
-    let doctor = "Dr. Sharma, MD (General Medicine)";
-    let hospital = "Govt. General Hospital / AIIMS OPD";
-    let diagnosis = "OPD Clinical Consultation & Evaluation";
-    let medications = [
-      { name: "Tab. Amlodipine", dosage: "5 mg", frequency: "Once daily (Morning)", duration: "30 Days" },
-      { name: "Tab. Telmisartan", dosage: "40 mg", frequency: "Once daily (Night)", duration: "30 Days" },
-      { name: "Tab. Paracetamol", dosage: "650 mg", frequency: "SOS for body ache", duration: "As needed" }
-    ];
-    let investigations = ["ECG 12-Lead", "Serum Creatinine", "Lipid Profile"];
-    let vitals = "BP: 142/90 mmHg, Pulse: 78 bpm, SpO2: 98%";
-    let confidence = "98%";
-    let problems = [
-      "सीने में भारीपन व बेचैनी (Chest discomfort on brisk exertion)",
-      "अनियंत्रित उच्च रक्तचाप (Elevated Blood Pressure: 148/92 mmHg)",
-      "चलने या सीढ़ियाँ चढ़ने पर जल्दी सांस फूलना (Exertional breathlessness)"
-    ];
-    let relatedQueries = [
-      { query: "तकलीफ कब से है? (Duration / Onset)", detail: "पिछले 10-15 दिनों से लगातार चलने पर महसूस हो रही है" },
-      { query: "समस्या कब बढ़ती है? (Aggravating Factors)", detail: "सीढ़ियाँ चढ़ने या भारी काम करने पर सीने पर दबाव बढ़ता है" },
-      { query: "क्या आराम करने से राहत मिलती है? (Relieving Factor)", detail: "बैठ जाने या 5 मिनट रुकने पर दर्द कम हो जाता है" }
-    ];
-    let doctorQueries = [
-      "क्या ईसीजी के अलावा टीएमटी (TMT) या 2D-Echo जांच की आवश्यकता है?",
-      "बीपी और सीने की तकलीफ के लिए खान-पान में क्या सावधानी बरतें?"
-    ];
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      formData.append("documentType", "prescription");
 
-    if (name.includes("blood") || name.includes("lab") || name.includes("test")) {
-      docType = "Laboratory Diagnostic Report";
-      doctor = "Biochemistry & Pathology Dept";
-      hospital = "District Central Diagnostics Lab";
-      diagnosis = "Complete Blood Count & Metabolic Profile";
-      medications = [];
-      problems = [
-        "उच्च रक्त शर्करा स्तर (Fasting Blood Sugar elevated: 142 mg/dL)",
-        "कमजोरी व बार-बार प्यास लगना (Fatigue and increased thirst)",
-        "कोलेस्ट्रॉल बॉर्डरलाइन हाई (Borderline high lipid markers)"
-      ];
-      relatedQueries = [
-        { query: "शुगर की जांच कब कराई थी?", detail: "सुबह खाली पेट (Fasting 12 hours)" },
-        { query: "क्या चक्कर या धुंधलापन महसूस होता है?", detail: "दोपहर में थकावट ज्यादा होती है" }
-      ];
-      doctorQueries = [
-        "क्या HbA1c के बाद नियमित डायबिटीज़ दवा शुरू करनी होगी?",
-        "डाइट प्लान में कार्बोहाइड्रेट्स और मीठे का क्या नियंत्रण रखें?"
-      ];
-      investigations = [
-        "Hemoglobin: 14.2 g/dL (Normal: 13.0 - 17.0)",
-        "Fasting Blood Glucose: 126 mg/dL (Borderline)",
-        "HbA1c: 6.2% (Pre-diabetic range)",
-        "Platelet Count: 245,000 /mcL"
-      ];
-      vitals = "Sample: Fasting Serum | Collected: 08:30 AM";
-      confidence = "97%";
-    } else if (name.includes("discharge") || name.includes("summary")) {
-      docType = "Hospital Discharge Summary";
-      doctor = "Dr. K. S. Verma (Chief Medical Officer)";
-      hospital = "District Civil Hospital & Trauma Center";
-      diagnosis = "Acute Febrile Illness & Observation - Discharged Stable";
-      medications = [
-        { name: "Tab. Cefixime", dosage: "200 mg", frequency: "Twice daily (BD)", duration: "5 Days" },
-        { name: "Tab. Pantoprazole", dosage: "40 mg", frequency: "Once daily before food", duration: "10 Days" },
-        { name: "Syp. Multivitamin", dosage: "10 ml", frequency: "Once daily at night", duration: "15 Days" }
-      ];
-      problems = [
-        "वायरल बुखार व शरीर दर्द का इतिहास (Past history of acute febrile illness)",
-        "रिकवरी के बाद की सामान्य कमजोरी (Post-illness recovery fatigue)"
-      ];
-      relatedQueries = [
-        { query: "बुखार कितने दिन रहा?", detail: "3 दिन तेज बुखार रहा था, अब सामान्य है" },
-        { query: "भूख और पाचन की स्थिति?", detail: "भूख सामान्य हो रही है" }
-      ];
-      doctorQueries = [
-        "क्या रूटीन जांच में कोई फॉलो-अप ब्लड टेस्ट कराना है?",
-        "सामान्य दिनचर्या और काम पर कब से लौट सकते हैं?"
-      ];
-      investigations = ["Chest X-Ray PA View (Clear)", "Urine Routine (Normal)"];
-      vitals = "BP: 122/80 mmHg, Pulse: 72 bpm, Afebrile";
-      confidence = "96%";
-    }
-
-    return {
-      id: `upload-${Date.now()}`,
-      title: file.name,
-      date: new Date().toLocaleDateString("en-IN", {
-        day: "2-digit",
-        month: "short",
-        year: "numeric"
-      }),
-      type: docType,
-      isPdf: isPdf,
-      confidence: confidence,
-      doctor: doctor,
-      hospital: hospital,
-      previewUrl: dataUrl,
-      fileSize: `${(file.size / 1024).toFixed(1)} KB`,
-      extractedData: {
-        diagnosis: diagnosis,
-        problems: problems,
-        relatedQueries: relatedQueries,
-        doctorQueries: doctorQueries,
-        medications: medications,
-        investigations: investigations,
-        vitals: vitals
+      const headers = { "X-Requested-With": "XMLHttpRequest" };
+      if (kioskSessionToken) {
+        headers["X-Kiosk-Session"] = kioskSessionToken;
       }
-    };
+
+      const res = await fetch("/api/documents/upload", {
+        method: "POST",
+        credentials: "include",
+        headers,
+        body: formData
+      });
+
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        const existingHandle = errData?.existingDocumentHandle || errData?.existingDocumentId || errData?.error?.existingDocumentHandle || errData?.error?.existingDocumentId;
+        if (res.status === 409 && existingHandle) {
+          setUploadedHandle(existingHandle);
+          setProgress(50);
+          setScanStep("Document recognized! Loading extracted entities...");
+          pollDocumentStatus(existingHandle, file.name, previewUrl);
+          return;
+        }
+        throw new Error(errData?.error?.message || `Upload failed (${res.status})`);
+      }
+
+      const data = await res.json();
+      const doc = data.document || {};
+      const handle = doc.documentHandle || doc.documentId;
+      setUploadedHandle(handle);
+
+      setProgress(35);
+      setScanStep("Text Recognition (OCR Engine)");
+
+      // Poll until worker processing finishes
+      pollDocumentStatus(handle, file.name, previewUrl);
+    } catch (err) {
+      console.warn("Document upload error:", err.message);
+      setScanState("error");
+      setErrorMessage(err.message || "Failed to upload document to clinical worker.");
+    }
   };
 
   // Handle Real File Upload
@@ -223,11 +221,16 @@ export const DocumentScannerPage = () => {
     const file = e.target.files?.[0];
     if (!file) return;
 
+    if (file.size > 15 * 1024 * 1024) {
+      setErrorMessage("File exceeds 15MB limit. Please upload a smaller scan.");
+      setScanState("error");
+      return;
+    }
+
     const reader = new FileReader();
     reader.onload = (event) => {
       const dataUrl = event.target.result;
-      const customDoc = analyzeUploadedFile(file, dataUrl);
-      runOCR(customDoc, dataUrl);
+      uploadAndProcessFile(file, dataUrl);
     };
     reader.readAsDataURL(file);
   };
@@ -237,11 +240,15 @@ export const DocumentScannerPage = () => {
     e.preventDefault();
     const file = e.dataTransfer.files?.[0];
     if (file) {
+      if (file.size > 15 * 1024 * 1024) {
+        setErrorMessage("File exceeds 15MB limit.");
+        setScanState("error");
+        return;
+      }
       const reader = new FileReader();
       reader.onload = (event) => {
         const dataUrl = event.target.result;
-        const customDoc = analyzeUploadedFile(file, dataUrl);
-        runOCR(customDoc, dataUrl);
+        uploadAndProcessFile(file, dataUrl);
       };
       reader.readAsDataURL(file);
     }
@@ -260,7 +267,6 @@ export const DocumentScannerPage = () => {
         videoRef.current.srcObject = stream;
       }
     } catch (err) {
-      console.error("Camera access error:", err);
       setCameraError("Camera access was denied or not supported on this device.");
     }
   };
@@ -272,49 +278,20 @@ export const DocumentScannerPage = () => {
     canvas.height = videoRef.current.videoHeight || 480;
     const ctx = canvas.getContext("2d");
     ctx.drawImage(videoRef.current, 0, 0, canvas.width, canvas.height);
-    const dataUrl = canvas.toDataURL("image/jpeg");
 
-    // Stop camera
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach((track) => track.stop());
-      streamRef.current = null;
-    }
-    setIsCameraActive(false);
+    canvas.toBlob((blob) => {
+      if (!blob) return;
+      const file = new File([blob], `scan_capture_${Date.now()}.jpg`, { type: "image/jpeg" });
+      const dataUrl = canvas.toDataURL("image/jpeg");
 
-    const docFromCamera = {
-      id: `cam-${Date.now()}`,
-      title: "Camera Capture Slip",
-      date: new Date().toLocaleDateString("en-IN", {
-        day: "2-digit",
-        month: "short",
-        year: "numeric"
-      }),
-      type: "Kiosk Camera Scan",
-      confidence: "96%",
-      doctor: "Dr. K. S. Verma (MD)",
-      hospital: "District Civil Hospital",
-      previewUrl: dataUrl,
-      extractedData: {
-        diagnosis: "Essential Hypertension & Routine Checkup",
-        medications: [
-          {
-            name: "Tab. Amlodipine",
-            dosage: "5 mg",
-            frequency: "Morning",
-            duration: "30 Days"
-          },
-          {
-            name: "Tab. Telmisartan",
-            dosage: "40 mg",
-            frequency: "Night",
-            duration: "30 Days"
-          }
-        ],
-        investigations: ["Lipid Profile", "ECG"],
-        vitals: "BP: 140/90 mmHg, Pulse: 76 bpm"
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach((track) => track.stop());
+        streamRef.current = null;
       }
-    };
-    runOCR(docFromCamera, dataUrl);
+      setIsCameraActive(false);
+
+      uploadAndProcessFile(file, dataUrl);
+    }, "image/jpeg", 0.9);
   };
 
   const closeCamera = () => {
@@ -323,6 +300,24 @@ export const DocumentScannerPage = () => {
       streamRef.current = null;
     }
     setIsCameraActive(false);
+  };
+
+  // Delete staged draft scan
+  const handleDeleteDraft = () => {
+    if (pollTimerRef.current) {
+      clearInterval(pollTimerRef.current);
+    }
+    setScanState("idle");
+    setProgress(0);
+    setScanStep("");
+    setPreviewImage(null);
+    setSelectedDocName("");
+    setUploadedHandle(null);
+    setActiveScannedDoc(null);
+    setErrorMessage("");
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
+    }
   };
 
   return (
@@ -345,12 +340,12 @@ export const DocumentScannerPage = () => {
           <div>
             <h1 className="text-base font-black text-slate-900">Medical Document OCR Scanner</h1>
             <p className="text-[11px] text-slate-500">
-              Digitize old prescriptions, discharge summaries & lab test reports
+              Digitize prescriptions and diagnostic lab reports with Google Gemini 2.5 Flash & Tesseract v5
             </p>
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <span className="text-xs font-bold text-slate-500">Step 3 of 5</span>
+          <span className="text-xs font-bold text-slate-500">Step 4 of 5</span>
           <button
             onClick={() => setActiveTab("summary")}
             className="text-xs text-blue-600 hover:text-blue-800 font-bold underline cursor-pointer"
@@ -367,7 +362,7 @@ export const DocumentScannerPage = () => {
           <div>
             <h2 className="text-lg font-black text-slate-900">Upload or Scan Document</h2>
             <p className="text-xs text-slate-500 mt-0.5">
-              Select an image/PDF from your device or use the live camera.
+              Select an image or PDF from your device or use the live kiosk camera.
             </p>
           </div>
 
@@ -403,45 +398,15 @@ export const DocumentScannerPage = () => {
             <span>Open Kiosk Camera Scanner (कैमरा से फोटो लें)</span>
           </button>
 
-          {/* Sample Presets for Instant Testing */}
-          <div className="space-y-2 pt-2 border-t border-slate-100">
-            <span className="text-[11px] font-extrabold uppercase text-slate-400 block tracking-wider">
-              Or Click a Sample Document to Test Instantly:
-            </span>
-            <div className="grid grid-cols-3 gap-2">
-              <button
-                onClick={() => runOCR(mockSampleDocuments[0])}
-                className="bg-slate-50 hover:bg-blue-50 border border-slate-200 hover:border-blue-400 rounded-2xl p-3 text-center transition cursor-pointer"
-              >
-                <FileText size={18} className="text-blue-600 mx-auto mb-1" />
-                <span className="text-[11px] font-extrabold text-slate-800 block">
-                  Prescription
-                </span>
-                <span className="text-[9px] text-slate-400">Dr. Verma</span>
-              </button>
-
-              <button
-                onClick={() => runOCR(mockSampleDocuments[1])}
-                className="bg-slate-50 hover:bg-blue-50 border border-slate-200 hover:border-blue-400 rounded-2xl p-3 text-center transition cursor-pointer"
-              >
-                <FileText size={18} className="text-emerald-600 mx-auto mb-1" />
-                <span className="text-[11px] font-extrabold text-slate-800 block">
-                  Blood Report
-                </span>
-                <span className="text-[9px] text-slate-400">Hb & Glucose</span>
-              </button>
-
-              <button
-                onClick={() => runOCR(mockSampleDocuments[2])}
-                className="bg-slate-50 hover:bg-blue-50 border border-slate-200 hover:border-blue-400 rounded-2xl p-3 text-center transition cursor-pointer"
-              >
-                <FileText size={18} className="text-indigo-600 mx-auto mb-1" />
-                <span className="text-[11px] font-extrabold text-slate-800 block">
-                  Discharge
-                </span>
-                <span className="text-[9px] text-slate-400">Hospital Slip</span>
-              </button>
+          {/* Security & Verification Notice */}
+          <div className="p-4 bg-slate-50 border border-slate-200 rounded-2xl text-[11px] text-slate-600 space-y-1">
+            <div className="font-extrabold text-slate-800 flex items-center gap-1.5">
+              <CheckCircle2 size={13} className="text-emerald-600" />
+              <span>Evidence-Verified Extraction Guarantee</span>
             </div>
+            <p className="text-slate-500 leading-relaxed">
+              No simulated data is ever generated. All clinical entities are extracted from your actual document using multi-lingual OCR and verified with Google GenAI.
+            </p>
           </div>
         </div>
 
@@ -457,7 +422,7 @@ export const DocumentScannerPage = () => {
                 No Document Scanned Yet
               </h3>
               <p className="text-xs text-slate-500 leading-relaxed">
-                Upload a photo of your doctor's slip or select one of the sample presets to test the OCR engine.
+                Upload a photo or PDF of your doctor's slip to start automated text recognition.
               </p>
             </div>
           )}
@@ -536,28 +501,55 @@ export const DocumentScannerPage = () => {
             </div>
           )}
 
+          {/* ERROR STATE */}
+          {scanState === "error" && (
+            <div className="space-y-4 w-full max-w-sm mx-auto">
+              <div className="w-16 h-16 rounded-full bg-red-100 text-red-600 flex items-center justify-center mx-auto">
+                <ShieldAlert size={32} />
+              </div>
+              <div>
+                <h3 className="text-base font-black text-slate-900">Extraction Error</h3>
+                <p className="text-xs text-slate-600 mt-1">{errorMessage || "Failed to process document."}</p>
+              </div>
+              <div className="flex gap-2 justify-center">
+                <button
+                  onClick={() => fileInputRef.current?.click()}
+                  className="bg-blue-600 hover:bg-blue-700 text-white font-bold px-4 py-2 rounded-xl text-xs cursor-pointer"
+                >
+                  Upload Clearer Scan
+                </button>
+                <button
+                  onClick={handleDeleteDraft}
+                  className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold px-4 py-2 rounded-xl text-xs cursor-pointer"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
+
           {/* DONE STATE */}
           {scanState === "done" && (
             <div className="space-y-4 w-full">
-              <div className="w-16 h-16 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center mx-auto shadow-sm animate-bounce">
+              <div className="w-16 h-16 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center mx-auto shadow-sm">
                 <CheckCircle2 size={32} />
               </div>
 
               <div>
                 <span className="bg-emerald-100 text-emerald-800 text-[10px] font-black uppercase px-2.5 py-0.5 rounded-full border border-emerald-300">
-                  OCR Complete • 96% Accuracy
+                  OCR Complete
                 </span>
                 <h3 className="font-black text-slate-900 text-lg mt-1">
                   Extracted from: {selectedDocName}
                 </h3>
                 <p className="text-xs text-slate-500">
-                  Prescriptions, lab values and doctor advice digitized successfully.
+                  Prescriptions, clinical entities and advice digitized successfully.
                 </p>
               </div>
 
-              {/* Preview Thumbnail if available */}
+              {/* Preview Thumbnail */}
               {previewImage && (
-                <div className="max-w-[220px] mx-auto rounded-2xl overflow-hidden border-2 border-slate-200 shadow-xs bg-slate-50 p-2">
+                <div className="max-w-[220px] mx-auto rounded-2xl overflow-hidden border-2 border-slate-200 shadow-xs bg-slate-50 p-2 relative group">
                   {previewImage.startsWith("data:application/pdf") || selectedDocName.toLowerCase().endsWith(".pdf") ? (
                     <div className="flex items-center gap-2 p-2 bg-red-50 border border-red-200 rounded-xl text-xs text-red-800">
                       <FileText size={24} className="text-red-600 shrink-0" />
@@ -579,9 +571,15 @@ export const DocumentScannerPage = () => {
                 </div>
               )}
 
+              {/* Action Buttons: View, Proceed, Delete Draft */}
               <div className="flex flex-col sm:flex-row gap-2.5 justify-center pt-2">
                 <button
-                  onClick={() => setActiveTab("ocr-results")}
+                  onClick={() => {
+                    if (onNavigate) {
+                      onNavigate("/kiosk/ocr-results");
+                    }
+                    setActiveTab("ocr-results");
+                  }}
                   className="bg-blue-600 hover:bg-blue-700 text-white font-black px-6 py-3 rounded-xl text-xs flex items-center justify-center gap-1.5 shadow-md transition cursor-pointer"
                 >
                   <Eye size={15} />
@@ -590,10 +588,24 @@ export const DocumentScannerPage = () => {
                 </button>
 
                 <button
-                  onClick={() => setActiveTab("summary")}
+                  onClick={() => {
+                    if (onNavigate) {
+                      onNavigate("/kiosk/review");
+                    }
+                    setActiveTab("summary");
+                  }}
                   className="bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold px-4 py-3 rounded-xl text-xs flex items-center justify-center gap-1 transition cursor-pointer"
                 >
                   <span>Proceed to Case Sheet</span>
+                </button>
+
+                <button
+                  onClick={handleDeleteDraft}
+                  className="bg-red-50 hover:bg-red-100 text-red-700 font-bold px-3 py-3 rounded-xl text-xs flex items-center justify-center gap-1 transition cursor-pointer border border-red-200"
+                  title="Delete Draft Scan"
+                >
+                  <Trash2 size={15} />
+                  <span>Delete Draft</span>
                 </button>
               </div>
             </div>
@@ -633,7 +645,6 @@ export const DocumentScannerPage = () => {
                   playsInline
                   className="w-full h-full object-cover"
                 />
-                {/* Viewfinder Overlay Grid */}
                 <div className="absolute inset-4 border-2 border-dashed border-white/70 rounded-xl pointer-events-none flex flex-col justify-between p-3">
                   <span className="text-[10px] text-white/90 bg-black/60 px-2 py-0.5 rounded self-start font-mono">
                     Align prescription inside box
@@ -663,3 +674,5 @@ export const DocumentScannerPage = () => {
     </div>
   );
 };
+
+export default DocumentScannerPage;

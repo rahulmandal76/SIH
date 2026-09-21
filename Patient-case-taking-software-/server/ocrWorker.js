@@ -2,6 +2,7 @@ import { execFile } from "child_process";
 import path from "path";
 import { promisify } from "util";
 import { extractClinicalDate } from "./documentIngestion.js";
+import { documentAiExtractor } from "./documentAiExtractor.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -125,13 +126,52 @@ export class DocumentOCRWorker {
       });
     }
 
+    // Aggregate all page texts for structured clinical fact extraction
+    const fullPdfText = pages.map(p => p.text || "").join("\n");
+    let extraction = null;
+    try {
+      extraction = await documentAiExtractor.extractDocument({
+        documentId: doc.documentId,
+        patientUid: doc.patientUid,
+        pageNumber: 1,
+        filePath: doc.filePath,
+        rawOcrText: fullPdfText,
+        mimeType: doc.mimeType
+      });
+
+      if (extraction?.facts && extraction.facts.length > 0) {
+        for (const f of extraction.facts) {
+          await this.prisma.documentClinicalFact.create({
+            data: {
+              documentId: doc.documentId,
+              patientUid: doc.patientUid,
+              pageNumber: f.pageNumber || 1,
+              factType: f.factType,
+              factKey: f.factKey,
+              factValue: f.factValue,
+              unit: f.unit,
+              clinicalDate: f.clinicalDate || detectedClinicalDate || doc.clinicalDate,
+              confidence: f.confidence || 1.0,
+              provenance: f.provenance || "DOCUMENT_EXTRACTED",
+              version: doc.derivativeVersion || 1,
+              evidenceStatus: f.evidenceStatus || "VERIFIED",
+              boundingBox: f.boundingBox,
+              sourceSnippet: f.sourceSnippet
+            }
+          }).catch(err => console.warn(`[PDF_FACT_PERSIST_WARN] ${err.message}`));
+        }
+      }
+    } catch (extractErr) {
+      console.warn(`[PDF_AI_EXTRACT_WARN] ${extractErr.message}`);
+    }
+
     // Update document record
     await this.prisma.document.update({
       where: { documentId: doc.documentId },
       data: {
         totalPages: result.totalPages || pages.length || 1,
         status: "ready",
-        clinicalDate: detectedClinicalDate || doc.clinicalDate
+        clinicalDate: detectedClinicalDate || extraction?.clinicalDate || doc.clinicalDate
       }
     });
 
@@ -141,6 +181,8 @@ export class DocumentOCRWorker {
         where: { id: job.id },
         data: {
           status: "completed",
+          aiModel: extraction?.model || "gemini-2.5-flash",
+          promptVersion: extraction?.promptVersion || "v2.1-clinical-fact-extraction",
           completedAt: new Date()
         }
       });
@@ -245,12 +287,50 @@ export class DocumentOCRWorker {
       }
     });
 
+    // Structured clinical fact extraction with multimodal Gemini & evidence verification
+    let extraction = null;
+    try {
+      extraction = await documentAiExtractor.extractDocument({
+        documentId: doc.documentId,
+        patientUid: doc.patientUid,
+        pageNumber: 1,
+        filePath: doc.filePath,
+        rawOcrText: ocrText,
+        mimeType: doc.mimeType
+      });
+
+      if (extraction?.facts && extraction.facts.length > 0) {
+        for (const f of extraction.facts) {
+          await this.prisma.documentClinicalFact.create({
+            data: {
+              documentId: doc.documentId,
+              patientUid: doc.patientUid,
+              pageNumber: f.pageNumber || 1,
+              factType: f.factType,
+              factKey: f.factKey,
+              factValue: f.factValue,
+              unit: f.unit,
+              clinicalDate: f.clinicalDate || detectedClinicalDate || doc.clinicalDate,
+              confidence: f.confidence || confidence,
+              provenance: f.provenance || "OCR_EXTRACTED",
+              version: doc.derivativeVersion || 1,
+              evidenceStatus: f.evidenceStatus || "VERIFIED",
+              boundingBox: f.boundingBox,
+              sourceSnippet: f.sourceSnippet
+            }
+          }).catch(err => console.warn(`[IMAGE_FACT_PERSIST_WARN] ${err.message}`));
+        }
+      }
+    } catch (extractErr) {
+      console.warn(`[IMAGE_AI_EXTRACT_WARN] ${extractErr.message}`);
+    }
+
     await this.prisma.document.update({
       where: { documentId: doc.documentId },
       data: {
         totalPages: 1,
         status: "ready",
-        clinicalDate: detectedClinicalDate || doc.clinicalDate
+        clinicalDate: detectedClinicalDate || extraction?.clinicalDate || doc.clinicalDate
       }
     });
 
@@ -259,6 +339,8 @@ export class DocumentOCRWorker {
         where: { id: job.id },
         data: {
           status: "completed",
+          aiModel: extraction?.model || "gemini-2.5-flash",
+          promptVersion: extraction?.promptVersion || "v2.1-clinical-fact-extraction",
           completedAt: new Date()
         }
       });
@@ -268,21 +350,23 @@ export class DocumentOCRWorker {
   /**
    * Fetch extracted pages for a document (defaults to current derivativeVersion if not specified)
    */
-  async getDocumentPages(documentId, version) {
-    const where = { documentId };
-    if (version !== undefined) {
-      where.version = version;
-    } else {
-      const doc = await this.prisma.document.findUnique({
-        where: { documentId },
-        select: { derivativeVersion: true }
-      });
-      if (doc) {
-        where.version = doc.derivativeVersion;
-      }
-    }
+  async getDocumentPages(identifier, version) {
+    const doc = await this.prisma.document.findFirst({
+      where: {
+        OR: [
+          { documentId: identifier },
+          { documentHandle: identifier }
+        ]
+      },
+      select: { documentId: true, derivativeVersion: true }
+    });
+    const canonicalId = doc ? doc.documentId : identifier;
+    const targetVersion = version !== undefined ? version : (doc ? doc.derivativeVersion : 1);
     return this.prisma.documentPage.findMany({
-      where,
+      where: {
+        documentId: canonicalId,
+        version: targetVersion
+      },
       orderBy: { pageNumber: "asc" }
     });
   }
@@ -290,18 +374,70 @@ export class DocumentOCRWorker {
   /**
    * Fetch full lifecycle status of a document
    */
-  async getDocumentStatus(documentId) {
-    const doc = await this.prisma.document.findUnique({
-      where: { documentId },
+  async getDocumentStatus(identifier) {
+    const doc = await this.prisma.document.findFirst({
+      where: {
+        OR: [
+          { documentId: identifier },
+          { documentHandle: identifier }
+        ]
+      },
       include: {
         jobs: { orderBy: { id: "desc" }, take: 1 }
       }
     });
     if (!doc) return null;
     const pages = await this.prisma.documentPage.findMany({
-      where: { documentId, version: doc.derivativeVersion },
+      where: { documentId: doc.documentId, version: doc.derivativeVersion },
       orderBy: { pageNumber: "asc" }
     });
     return { ...doc, pages };
+  }
+
+  /**
+   * Recover abandoned job locks (jobs in 'processing' or 'locked' for > 5 minutes)
+   */
+  async recoverAbandonedLocks(timeoutMinutes = 5) {
+    const staleThreshold = new Date(Date.now() - timeoutMinutes * 60 * 1000);
+    const recovered = await this.prisma.documentProcessingJob.updateMany({
+      where: {
+        status: { in: ["processing", "locked"] },
+        startedAt: { lt: staleThreshold },
+        retryCount: { lt: 3 }
+      },
+      data: {
+        status: "queued"
+      }
+    }).catch(() => ({ count: 0 }));
+    return recovered.count || 0;
+  }
+
+  /**
+   * Atomically claim the next queued job for durable background worker processing
+   */
+  async claimNextJob() {
+    await this.recoverAbandonedLocks();
+
+    const pendingJob = await this.prisma.documentProcessingJob.findFirst({
+      where: {
+        status: "queued",
+        retryCount: { lt: 3 }
+      },
+      orderBy: { id: "asc" }
+    });
+
+    if (!pendingJob) return null;
+
+    // Atomically claim by transitioning status to 'processing'
+    const claimed = await this.prisma.documentProcessingJob.update({
+      where: { id: pendingJob.id },
+      data: {
+        status: "processing",
+        startedAt: new Date(),
+        retryCount: { increment: 1 }
+      }
+    }).catch(() => null);
+
+    return claimed;
   }
 }

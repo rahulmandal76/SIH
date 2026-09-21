@@ -96,12 +96,21 @@ export function computeSha256(buffer) {
 export function extractClinicalDate(text = "") {
   if (!text || typeof text !== "string") return null;
 
-  // 1. Explicit labels: "Date: 12/05/2023", "Dated: 2022-11-04", "Report Date: 14 May 2023"
-  const labeledPattern = /(?:date\s*[:\-]|dated\s*[:\-]|visit\s*date\s*[:\-]|report\s*date\s*[:\-]|admission\s*date\s*[:\-]|discharge\s*date\s*[:\-])\s*([0-9]{1,4}[/\-.][0-9]{1,2}[/\-.][0-9]{1,4}|[0-9]{1,2}\s+[A-Za-z]{3,9}\s+[0-9]{4})/i;
-  const labeledMatch = text.match(labeledPattern);
-  if (labeledMatch) {
-    const d = parseDateString(labeledMatch[1]);
-    if (d) return d;
+  // 1. Explicit labels in clinical priority order:
+  // Clinical sample collection / admission takes precedence over report verification or printout dates.
+  const priorityPatterns = [
+    /(?:sample\s*collection\s*date|specimen\s*collection\s*date|collection\s*date)\s*[:\-]\s*([0-9]{1,4}[/\-.][0-9]{1,2}[/\-.][0-9]{1,4}|[0-9]{1,2}\s+[A-Za-z]{3,9}\s+[0-9]{4})/i,
+    /(?:admission\s*date|visit\s*date|encounter\s*date)\s*[:\-]\s*([0-9]{1,4}[/\-.][0-9]{1,2}[/\-.][0-9]{1,4}|[0-9]{1,2}\s+[A-Za-z]{3,9}\s+[0-9]{4})/i,
+    /(?:report\s*verified\s*date|report\s*date|discharge\s*date)\s*[:\-]\s*([0-9]{1,4}[/\-.][0-9]{1,2}[/\-.][0-9]{1,4}|[0-9]{1,2}\s+[A-Za-z]{3,9}\s+[0-9]{4})/i,
+    /(?:date\s*[:\-]|dated\s*[:\-]|दिनांक\s*[:\-]|तारीख\s*[:\-])\s*([0-9]{1,4}[/\-.][0-9]{1,2}[/\-.][0-9]{1,4}|[0-9]{1,2}\s+[A-Za-z]{3,9}\s+[0-9]{4})/i
+  ];
+
+  for (const pattern of priorityPatterns) {
+    const match = text.match(pattern);
+    if (match) {
+      const d = parseDateString(match[1]);
+      if (d) return d;
+    }
   }
 
   // 2. ISO format YYYY-MM-DD
@@ -121,11 +130,41 @@ export function extractClinicalDate(text = "") {
   return null;
 }
 
+const MONTH_MAP = {
+  jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6,
+  jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12
+};
+
 function parseDateString(str) {
+  if (!str) return null;
   try {
+    // Check for DD Mon YYYY format: e.g. "25 Oct 2023" or "25-Oct-2023"
+    const namedMonthMatch = str.match(/\b([0-9]{1,2})[\s\-]+([A-Za-z]{3,9})[\s\-]+([0-9]{4})\b/);
+    if (namedMonthMatch) {
+      const day = parseInt(namedMonthMatch[1], 10);
+      const monStr = namedMonthMatch[2].toLowerCase().slice(0, 3);
+      const mon = MONTH_MAP[monStr];
+      const year = parseInt(namedMonthMatch[3], 10);
+      if (mon && year >= 1950 && year <= 2050 && day >= 1 && day <= 31) {
+        return new Date(Date.UTC(year, mon - 1, day));
+      }
+    }
+
+    // Check for YYYY-MM-DD
+    const isoMatch = str.match(/\b(19\d\d|20\d\d)[-/.](0[1-9]|1[0-2])[-/.](0[1-9]|[12]\d|3[01])\b/);
+    if (isoMatch) {
+      return new Date(Date.UTC(parseInt(isoMatch[1], 10), parseInt(isoMatch[2], 10) - 1, parseInt(isoMatch[3], 10)));
+    }
+
+    // Check for DD/MM/YYYY or DD-MM-YYYY
+    const dmyMatch = str.match(/\b(0[1-9]|[12]\d|3[01])[-/.](0[1-9]|1[0-2])[-/.](19\d\d|20\d\d)\b/);
+    if (dmyMatch) {
+      return new Date(Date.UTC(parseInt(dmyMatch[3], 10), parseInt(dmyMatch[2], 10) - 1, parseInt(dmyMatch[1], 10)));
+    }
+
     const d = new Date(str);
     if (!isNaN(d.getTime())) {
-      const year = d.getFullYear();
+      const year = d.getUTCFullYear();
       if (year >= 1950 && year <= 2050) {
         return d;
       }
@@ -206,6 +245,7 @@ export class DocumentIngestionService {
       err.code = "DUPLICATE_DOCUMENT";
       err.statusCode = 409;
       err.existingDocumentId = existing.documentId;
+      err.existingDocumentHandle = existing.documentHandle || existing.documentId;
       throw err;
     }
 
@@ -213,6 +253,7 @@ export class DocumentIngestionService {
     const year = new Date().getFullYear();
     const randHex = crypto.randomBytes(4).toString("hex").toUpperCase();
     const documentId = `DOC-${year}-${randHex}`;
+    const documentHandle = `doc_${crypto.randomBytes(16).toString("hex")}`;
 
     // Target patient storage directory
     const patientDir = path.join(this.uploadBaseDir, patientUid);
@@ -240,6 +281,7 @@ export class DocumentIngestionService {
     const newDoc = await this.prisma.document.create({
       data: {
         documentId,
+        documentHandle,
         patientUid,
         encounterId,
         fileName: safeOriginalName,

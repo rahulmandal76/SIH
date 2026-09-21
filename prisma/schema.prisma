@@ -61,6 +61,7 @@ model Patient {
 model Encounter {
   id                 Int       @id @default(autoincrement())
   encounterId        String    @unique
+  caseHandle         String?
   patientUid         String
   assignedDoctorId   Int?      // Enforces current encounter clinical access boundary
   tokenNumber        String
@@ -89,6 +90,7 @@ model Encounter {
   @@index([assignedDoctorId])
   @@index([tokenNumber])
   @@index([consultationStatus])
+  @@index([caseHandle])
 }
 
 model CareRelationship {
@@ -116,6 +118,7 @@ model CareRelationship {
 model Document {
   id           Int       @id @default(autoincrement())
   documentId   String    @unique
+  documentHandle String?
   patientUid   String
   encounterId  String?
   fileName     String
@@ -144,6 +147,7 @@ model Document {
   @@index([encounterId])
   @@index([fileHash])
   @@index([status])
+  @@index([documentHandle])
 }
 
 model DocumentPage {
@@ -170,6 +174,8 @@ model DocumentProcessingJob {
   status       String    @default("queued") // queued, processing, completed, failed
   retryCount   Int       @default(0)
   errorDetails String?
+  aiModel      String?
+  promptVersion String?
   startedAt    DateTime?
   completedAt  DateTime?
 
@@ -209,6 +215,9 @@ model DocumentClinicalFact {
   provenance   String    // DOCUMENT_EXTRACTED, OCR_EXTRACTED, DOCTOR_APPROVED, DOCTOR_ENTERED
   version      Int       @default(1)
   parentFactId Int?      // Lineage pointer to prior version fact
+  evidenceStatus String  @default("UNVERIFIED") // VERIFIED, UNVERIFIED_EVIDENCE, NEEDS_REVIEW
+  boundingBox    String? // JSON-serialized coordinates { x, y, w, h }
+  sourceSnippet  String? // Raw supporting text snippet
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @default(now())
 

@@ -1,7 +1,28 @@
 import React, { createContext, useContext, useState, useEffect } from "react";
-import { mockPatientQueue, mockSampleDocuments } from "../data/mockData";
 
 const DemoContext = createContext();
+
+const defaultPatient = {
+  token: "105",
+  patientId: "P-1001",
+  name: "Walk-in Patient",
+  age: 42,
+  gender: "Male",
+  language: "Hindi",
+  chiefComplaint: "Awaiting AI Clinical Intake",
+  historyStatus: "In Progress",
+  priority: "Normal",
+  triageReason: "Kiosk Self-Check-in",
+  caseData: {
+    hpi: "",
+    pastHistory: "",
+    currentMeds: [],
+    allergies: [],
+    familyHistory: "Nil reported",
+    extractedReports: []
+  },
+  conversation: []
+};
 
 export const DemoProvider = ({ children }) => {
   // Roles: "patient" | "doctor" | "landing"
@@ -19,13 +40,13 @@ export const DemoProvider = ({ children }) => {
   const [language, setLanguage] = useState("Hindi");
   const [patientData, setPatientData] = useState(() => {
     const saved = localStorage.getItem("medikiosk_current_patient");
-    return saved ? JSON.parse(saved) : mockPatientQueue[0];
+    return saved ? JSON.parse(saved) : defaultPatient;
   });
   const [redFlagTriggered, setRedFlagTriggered] = useState(false);
-  const [scannedDocs, setScannedDocs] = useState(mockPatientQueue[0].caseData.extractedReports);
+  const [scannedDocs, setScannedDocs] = useState([]);
   const [activeQueue, setActiveQueue] = useState(() => {
     const saved = localStorage.getItem("medikiosk_queue");
-    return saved ? JSON.parse(saved) : mockPatientQueue;
+    return saved ? JSON.parse(saved) : [];
   });
   const [patientConversation, setPatientConversation] = useState(() => {
     const saved = localStorage.getItem("medikiosk_conversation");
@@ -34,9 +55,7 @@ export const DemoProvider = ({ children }) => {
   const [latestToken, setLatestToken] = useState(() => {
     return parseInt(localStorage.getItem("medikiosk_token") || "105", 10);
   });
-  const [activeScannedDoc, setActiveScannedDoc] = useState(() => {
-    return mockSampleDocuments[0];
-  });
+  const [activeScannedDoc, setActiveScannedDoc] = useState(null);
 
   // Phase 3.1: Kiosk session token for patient-scope AI authorization.
   // Created by POST /api/intake and bound to a specific patientUid.

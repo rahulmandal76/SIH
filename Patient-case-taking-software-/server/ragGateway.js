@@ -153,21 +153,39 @@ export function validateBrowserRagQuery(req) {
   }
 
   // Validate clinical context identifiers
+  const caseHandle = req.body?.caseHandle ? String(req.body.caseHandle).trim() : null;
   const encounterId = req.body?.encounterId ? String(req.body.encounterId).trim() : null;
   const careRelationshipId = req.body?.careRelationshipId !== undefined && req.body?.careRelationshipId !== null && req.body?.careRelationshipId !== ""
     ? req.body.careRelationshipId
     : null;
 
-  if (!encounterId && !careRelationshipId) {
+  if (caseHandle && (encounterId || req.body?.documentId)) {
     return {
       valid: false,
       error: "VALIDATION_ERROR",
-      message: "A valid clinical context (encounterId or careRelationshipId) is required to resolve patient identity."
+      message: "When caseHandle is provided, internal identifiers (encounterId, documentId) are strictly forbidden."
+    };
+  }
+
+  if (req.body?.documentId) {
+    return {
+      valid: false,
+      error: "VALIDATION_ERROR",
+      message: "documentId is strictly forbidden in RAG query requests. Clinical context is derived server-side."
+    };
+  }
+
+  if (!caseHandle && !encounterId && !careRelationshipId) {
+    return {
+      valid: false,
+      error: "VALIDATION_ERROR",
+      message: "A valid clinical context (caseHandle, encounterId, or careRelationshipId) is required to resolve patient identity."
     };
   }
 
   return {
     valid: true,
+    caseHandle,
     encounterId,
     careRelationshipId,
     query: trimmedQuery,
@@ -178,7 +196,7 @@ export function validateBrowserRagQuery(req) {
 }
 
 // ─── 2. Authentication & Clinical Authorization ──────────────────────────────
-export async function authorizeAndResolvePatient(prisma, req, { encounterId, careRelationshipId }) {
+export async function authorizeAndResolvePatient(prisma, req, { caseHandle, encounterId, careRelationshipId }) {
   // Reject unauthenticated patient encounter and device terminal sessions explicitly
   if (!req.user && (req.device || req.encounterSession)) {
     return {
@@ -222,6 +240,60 @@ export async function authorizeAndResolvePatient(prisma, req, { encounterId, car
       };
     }
     adminReason = headerReason.trim();
+  }
+
+  // ── Context 0: CaseHandle Resolution & Authorization ──
+  if (caseHandle) {
+    const enc = await prisma.encounter.findFirst({
+      where: {
+        OR: [
+          { caseHandle },
+          { encounterId: caseHandle }
+        ]
+      },
+      include: { patient: true }
+    });
+    if (!enc) {
+      return {
+        authorized: false,
+        status: 404,
+        error: "VALIDATION_ERROR",
+        message: `Case '${caseHandle}' not found.`
+      };
+    }
+
+    if (role === "doctor") {
+      const isAssigned = (enc.assignedDoctorId === req.user.id);
+      const activeCareRel = await prisma.careRelationship.findFirst({
+        where: {
+          patientUid: enc.patientUid,
+          doctorId: req.user.id,
+          status: "active",
+          OR: [
+            { expiresAt: null },
+            { expiresAt: { gt: new Date() } }
+          ],
+          endedAt: null
+        }
+      });
+
+      if (!isAssigned && !activeCareRel) {
+        return {
+          authorized: false,
+          status: 403,
+          error: "CLINICAL_ACCESS_DENIED",
+          message: "Doctor is not assigned to this encounter and has no active CareRelationship with patient."
+        };
+      }
+    }
+
+    return {
+      authorized: true,
+      patientUid: enc.patientUid,
+      encounter: enc,
+      careRel: null,
+      adminReason
+    };
   }
 
   // ── Context 1: Encounter Resolution & Authorization ──
@@ -368,7 +440,7 @@ export async function executeFastApiRagQuery({
   encounter,
   timeoutMs = RAG_GATEWAY_TIMEOUT_MS
 }) {
-  const secret = (process.env.RAG_SERVICE_INTERNAL_TOKEN || "").trim();
+  const secret = (process.env.RAG_SERVICE_INTERNAL_TOKEN || process.env.INTERNAL_RAG_SECRET || "").trim();
   if (!secret) {
     return {
       success: false,
@@ -378,7 +450,7 @@ export async function executeFastApiRagQuery({
     };
   }
 
-  const rawUrl = (process.env.RAG_SERVICE_URL || DEFAULT_RAG_SERVICE_URL).trim();
+  const rawUrl = (process.env.RAG_SERVICE_URL || process.env.FASTAPI_BASE_URL || DEFAULT_RAG_SERVICE_URL).trim();
   let parsedUrl;
   try {
     parsedUrl = new URL(rawUrl);
@@ -585,5 +657,35 @@ export async function auditRagQuery(prisma, {
     });
   } catch (err) {
     console.error("[RAGGateway:AuditError]", err.message);
+  }
+}
+
+/**
+ * Trigger internal RAG vector indexing on approved document version.
+ */
+export async function triggerRagIngest({ documentId, patientUid, documentVersion = 1 }) {
+  const ragUrl = process.env.RAG_SERVICE_URL || DEFAULT_RAG_SERVICE_URL;
+  const internalSecret = process.env.RAG_SERVICE_INTERNAL_TOKEN || process.env.INTERNAL_RAG_SECRET;
+  if (!ragUrl || !internalSecret) {
+    return { success: false, skipped: true, reason: "rag_service_not_configured" };
+  }
+
+  try {
+    const res = await fetch(`${ragUrl}/api/internal/rag/ingest`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Internal-Secret": internalSecret
+      },
+      body: JSON.stringify({
+        documentId,
+        patientUid,
+        documentVersion
+      })
+    });
+    const data = await res.json().catch(() => ({}));
+    return { success: res.ok, status: res.status, data };
+  } catch (err) {
+    return { success: false, error: err.message };
   }
 }

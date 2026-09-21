@@ -16,7 +16,7 @@ import {
   FileCheck
 } from "lucide-react";
 
-export const LoginPage = ({ initialRole = "doctor" }) => {
+export const LoginPage = ({ initialRole = "doctor", onNavigate }) => {
   const {
     setUserRole,
     switchRole,
@@ -76,7 +76,10 @@ export const LoginPage = ({ initialRole = "doctor" }) => {
       setPatientData(newPatient);
       switchRole("patient");
       setActiveTab("interview");
-    }, 700);
+      if (onNavigate) {
+        onNavigate("/kiosk/intake");
+      }
+    }, 500);
   };
 
   // Handle Doctor Login via Phase 4 Authenticated Endpoint
@@ -105,7 +108,13 @@ export const LoginPage = ({ initialRole = "doctor" }) => {
         setTimeout(() => {
           switchRole("doctor");
           setActiveTab("doctor");
-        }, 700);
+          if (onNavigate) {
+            onNavigate("/doctor/queue");
+          } else if (typeof window !== "undefined" && window.location.pathname.startsWith("/doctor")) {
+            window.history.pushState(null, "", "/doctor/queue");
+            window.dispatchEvent(new Event("popstate"));
+          }
+        }, 500);
       } else {
         setLoginErrorMsg(data?.error?.message || "Invalid doctor credentials or chamber authorization failed.");
       }
@@ -115,7 +124,13 @@ export const LoginPage = ({ initialRole = "doctor" }) => {
       setTimeout(() => {
         switchRole("doctor");
         setActiveTab("doctor");
-      }, 700);
+        if (onNavigate) {
+          onNavigate("/doctor/queue");
+        } else if (typeof window !== "undefined" && window.location.pathname.startsWith("/doctor")) {
+          window.history.pushState(null, "", "/doctor/queue");
+          window.dispatchEvent(new Event("popstate"));
+        }
+      }, 500);
     } finally {
       setIsSubmitting(false);
     }

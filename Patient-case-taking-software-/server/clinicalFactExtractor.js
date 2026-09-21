@@ -38,7 +38,10 @@ export const PROVENANCE_VALUES = [
   "PATIENT_REPORTED",
   "DOCUMENT_EXTRACTED",
   "OCR_EXTRACTED",
+  "DOCTOR_APPROVED",
   "DOCTOR_ENTERED",
+  "AI_GENERATED_SUMMARY",
+  "AI_CLINICAL_SUGGESTION",
   "MISSING_OR_UNKNOWN"
 ];
 
@@ -53,9 +56,12 @@ export const ClinicalFactSchema = z.object({
   unit: z.string().max(50).nullable().optional(),
   clinicalDate: z.date().nullable().optional(),
   confidence: z.number().min(0.0).max(1.0).default(1.0),
-  provenance: z.enum(["PATIENT_REPORTED", "DOCUMENT_EXTRACTED", "OCR_EXTRACTED", "DOCTOR_ENTERED", "MISSING_OR_UNKNOWN"]),
+  provenance: z.enum(PROVENANCE_VALUES),
   version: z.number().int().positive().default(1),
-  parentFactId: z.number().int().positive().nullable().optional()
+  parentFactId: z.number().int().positive().nullable().optional(),
+  evidenceStatus: z.enum(["VERIFIED", "UNVERIFIED_EVIDENCE", "NEEDS_REVIEW", "UNVERIFIED"]).default("UNVERIFIED"),
+  boundingBox: z.string().nullable().optional(),
+  sourceSnippet: z.string().nullable().optional()
 });
 
 export class ClinicalFactExtractor {

@@ -49,9 +49,12 @@ STRICT RULES — MUST FOLLOW WITHOUT EXCEPTION:
    initiated at 500 mg OD").
 5. If the requested information is NOT present in the provided records, explicitly
    state it is not documented in the available record. Do NOT invent data.
-6. This is a clinical decision-support tool. The clinician is the final authority.
+6. Distinguish strictly between facts that have been formally approved by a doctor (DOCTOR_APPROVED)
+   and unapproved facts (DOCUMENT_EXTRACTED or OCR_EXTRACTED). Always append '[UNAPPROVED - Pending Physician Review]'
+   to unapproved findings. Never state that an unapproved finding is confirmed.
+7. This is a clinical decision-support tool. The clinician is the final authority.
    Never present AI-generated content as a substitute for clinical judgment.
-7. Do NOT include any patient identifiers (name, UID, ID) in your response.
+8. Do NOT include any patient identifiers (name, UID, ID) in your response.
 """
 
 NO_HISTORY_SYSTEM_PROMPT = """You are a clinical assistant answering a question about a
@@ -92,11 +95,13 @@ def format_clinical_context(
         page = chunk.page_number
         provenance = chunk.provenance or "DOCUMENT_EXTRACTED"
         clinical_date = chunk.clinical_date or (f"{chunk.year}-01-01" if chunk.year else "Unknown")
+        is_approved = provenance in ("DOCTOR_APPROVED", "DOCTOR_ENTERED")
+        approval_tag = "[DOCTOR_APPROVED]" if is_approved else "[UNAPPROVED - Pending Physician Review]"
         # Wrap chunk in explicit data boundary to defend against prompt injection
         blocks.append(
             f"[CLINICAL RECORD DATA - UNTRUSTED SOURCE TEXT]\n"
             f"[YEAR: {year} | CLINICAL_DATE: {clinical_date} | DOCUMENT: {doc_id} | PAGE: {page} "
-            f"| VERSION: {chunk.document_version} | PROVENANCE: {provenance} | RELEVANCE: {score:.3f}]\n"
+            f"| VERSION: {chunk.document_version} | STATUS: {approval_tag} | PROVENANCE: {provenance} | RELEVANCE: {score:.3f}]\n"
             f"{chunk.source_text}\n"
             f"[END CLINICAL RECORD DATA]"
         )

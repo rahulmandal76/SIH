@@ -24,6 +24,7 @@ import { createRequire } from "module";
 import path from "path";
 import { fileURLToPath } from "url";
 import crypto from "crypto";
+import fs from "fs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -83,7 +84,8 @@ import {
   executeFastApiRagQuery,
   validateAndSanitizeFastApiResponse,
   auditRagQuery,
-  ragRateLimiter
+  ragRateLimiter,
+  triggerRagIngest
 } from "./server/ragGateway.js";
 
 const app = express();
@@ -798,6 +800,7 @@ app.post("/api/encounters", async (req, res) => {
     const encounter = await prisma.encounter.create({
       data: {
         encounterId,
+        caseHandle: `case_${crypto.randomBytes(16).toString("hex")}`,
         patientUid: targetPatientUid,
         tokenNumber: tokenStr,
         priority: priority || "Normal",
@@ -1382,6 +1385,7 @@ app.post("/api/intake", async (req, res) => {
       encounter = await prisma.encounter.create({
         data: {
           encounterId,
+          caseHandle:         `case_${crypto.randomBytes(16).toString("hex")}`,
           patientUid:         patient.patientUid,
           tokenNumber:        tokenStr,
           priority:           newPatient.priority    || "Normal",
@@ -2277,6 +2281,7 @@ app.post("/api/documents/upload", documentUploadMiddleware, async (req, res) => 
       success: true,
       document: {
         documentId: result.document.documentId,
+        documentHandle: result.document.documentHandle || result.document.documentId,
         fileName: result.document.fileName,
         fileSize: result.document.fileSize,
         mimeType: result.document.mimeType,
@@ -2296,7 +2301,8 @@ app.post("/api/documents/upload", documentUploadMiddleware, async (req, res) => 
     if (err.code === "DUPLICATE_DOCUMENT") {
       logRequest(req, 409, { duplicate: true, existingDocumentId: err.existingDocumentId });
       return ERR.DUPLICATE_DOCUMENT(res, "This document has already been uploaded for this patient", {
-        existingDocumentId: err.existingDocumentId
+        existingDocumentId: err.existingDocumentId,
+        existingDocumentHandle: err.existingDocumentHandle || err.existingDocumentId
       });
     }
     if (err.code === "FILE_TOO_LARGE") {
@@ -2318,6 +2324,33 @@ app.post("/api/documents/upload", documentUploadMiddleware, async (req, res) => 
   }
 });
 
+// Helper: resolve document by documentId or public documentHandle
+export async function findDocumentByHandleOrId(identifier) {
+  if (!identifier) return null;
+  return await prisma.document.findFirst({
+    where: {
+      OR: [
+        { documentId: identifier },
+        { documentHandle: identifier }
+      ]
+    }
+  });
+}
+
+// Helper: resolve case by encounterId or public caseHandle
+export async function resolveCaseHandle(caseHandle) {
+  if (!caseHandle) return null;
+  return await prisma.encounter.findFirst({
+    where: {
+      OR: [
+        { caseHandle },
+        { encounterId: caseHandle }
+      ]
+    },
+    include: { patient: true }
+  });
+}
+
 // GET /api/documents/:id/pages
 app.get("/api/documents/:id/pages", async (req, res) => {
   if (req.query && (req.query.patientUid !== undefined || req.query.patientId !== undefined)) {
@@ -2333,9 +2366,7 @@ app.get("/api/documents/:id/pages", async (req, res) => {
     return ERR.AUTHENTICATION_REQUIRED(res, "Active patient encounter session or user session required to view document pages");
   }
 
-  const doc = await prisma.document.findUnique({
-    where: { documentId: req.params.id }
-  });
+  const doc = await findDocumentByHandleOrId(req.params.id);
 
   if (!doc) {
     return ERR.DOCUMENT_NOT_FOUND(res, `Document ${req.params.id} not found`);
@@ -2564,9 +2595,7 @@ async function authorizeClinicianForDocument(req, res, doc, { allowAdmin = true,
 
 // POST /api/documents/:id/extract — Fact Extraction (Idempotent for current derivativeVersion)
 app.post("/api/documents/:id/extract", async (req, res) => {
-  const doc = await prisma.document.findUnique({
-    where: { documentId: req.params.id }
-  });
+  const doc = await findDocumentByHandleOrId(req.params.id);
   if (!doc) {
     return ERR.DOCUMENT_NOT_FOUND(res, `Document ${req.params.id} not found`);
   }
@@ -2686,15 +2715,21 @@ app.post("/api/documents/:id/extract", async (req, res) => {
 
 // GET /api/documents/:id/facts — Fetch Facts for Version
 app.get("/api/documents/:id/facts", async (req, res) => {
-  const doc = await prisma.document.findUnique({
-    where: { documentId: req.params.id }
-  });
+  const doc = await findDocumentByHandleOrId(req.params.id);
   if (!doc) {
     return ERR.DOCUMENT_NOT_FOUND(res, `Document ${req.params.id} not found`);
   }
 
-  const auth = await authorizeClinicianForDocument(req, res, doc, { allowAdmin: true, requireDoctorOnly: false });
-  if (!auth) return;
+  const encCtx = getEncounterSessionContext(req);
+  if (encCtx) {
+    if (doc.patientUid !== encCtx.patientUid) {
+      logRequest(req, 403, { reason: "cross_patient_facts_access" });
+      return ERR.PATIENT_SCOPE_MISMATCH(res, "Document does not belong to active patient context");
+    }
+  } else {
+    const auth = await authorizeClinicianForDocument(req, res, doc, { allowAdmin: true, requireDoctorOnly: false });
+    if (!auth) return;
+  }
 
   const targetVersion = req.query.version !== undefined
     ? parseInt(req.query.version, 10)
@@ -2723,9 +2758,7 @@ app.get("/api/documents/:id/facts", async (req, res) => {
 
 // GET /api/documents/:id/review — Complete Clinician Review Bundle
 app.get("/api/documents/:id/review", async (req, res) => {
-  const doc = await prisma.document.findUnique({
-    where: { documentId: req.params.id }
-  });
+  const doc = await findDocumentByHandleOrId(req.params.id);
   if (!doc) {
     return ERR.DOCUMENT_NOT_FOUND(res, `Document ${req.params.id} not found`);
   }
@@ -2809,17 +2842,16 @@ app.put("/api/documents/:id/pages/:pageNumber", async (req, res) => {
     return ERR.VALIDATION_ERROR(res, "pageNumber must be a positive integer");
   }
 
-  const { expectedVersion, extractedText } = req.body || {};
+  const { expectedVersion, extractedText: bodyText, ocrText } = req.body || {};
+  const extractedText = typeof bodyText === "string" ? bodyText : (typeof ocrText === "string" ? ocrText : undefined);
   if (expectedVersion === undefined || isNaN(parseInt(expectedVersion, 10)) || parseInt(expectedVersion, 10) < 1) {
     return ERR.VALIDATION_ERROR(res, "expectedVersion is required and must be a positive integer");
   }
   if (typeof extractedText !== "string") {
-    return ERR.VALIDATION_ERROR(res, "extractedText string is required in request body");
+    return ERR.VALIDATION_ERROR(res, "extractedText or ocrText string is required in request body");
   }
 
-  const doc = await prisma.document.findUnique({
-    where: { documentId: req.params.id }
-  });
+  const doc = await findDocumentByHandleOrId(req.params.id);
   if (!doc) {
     return ERR.DOCUMENT_NOT_FOUND(res, `Document ${req.params.id} not found`);
   }
@@ -2983,9 +3015,7 @@ app.put("/api/documents/:id/facts/:factId", async (req, res) => {
     return ERR.VALIDATION_ERROR(res, "expectedVersion is required and must be a positive integer");
   }
 
-  const doc = await prisma.document.findUnique({
-    where: { documentId: req.params.id }
-  });
+  const doc = await findDocumentByHandleOrId(req.params.id);
   if (!doc) {
     return ERR.DOCUMENT_NOT_FOUND(res, `Document ${req.params.id} not found`);
   }
@@ -3183,9 +3213,7 @@ app.delete("/api/documents/:id/facts/:factId", async (req, res) => {
   }
   const expectedVersion = parseInt(rawVersion, 10);
 
-  const doc = await prisma.document.findUnique({
-    where: { documentId: req.params.id }
-  });
+  const doc = await findDocumentByHandleOrId(req.params.id);
   if (!doc) {
     return ERR.DOCUMENT_NOT_FOUND(res, `Document ${req.params.id} not found`);
   }
@@ -3343,21 +3371,23 @@ app.delete("/api/documents/:id/facts/:factId", async (req, res) => {
   }
 });
 
-// PUT /api/documents/:id/approve — Doctor Approval Gate (Exact Version Binding)
-app.put("/api/documents/:id/approve", async (req, res) => {
-  const { expectedVersion, action, comments } = req.body || {};
-  if (expectedVersion === undefined || isNaN(parseInt(expectedVersion, 10)) || parseInt(expectedVersion, 10) < 1) {
-    return ERR.VALIDATION_ERROR(res, "expectedVersion is required and must be a positive integer");
+// PUT & POST /api/documents/:id/approve — Doctor Approval Gate (Exact Version Binding)
+async function handleDocumentApprove(req, res) {
+  const rawVersion = req.body?.expectedVersion !== undefined ? req.body.expectedVersion : req.body?.approvedVersion;
+  if (rawVersion === undefined || isNaN(parseInt(rawVersion, 10)) || parseInt(rawVersion, 10) < 1) {
+    return ERR.VALIDATION_ERROR(res, "expectedVersion or approvedVersion is required and must be a positive integer");
   }
+  const expectedVersion = parseInt(rawVersion, 10);
 
+  const rawAction = req.body?.action || "APPROVED";
   const validActions = ["APPROVED", "REJECTED", "REQUIRES_RESCAN"];
-  if (!action || !validActions.includes(action)) {
+  if (!validActions.includes(rawAction)) {
     return ERR.VALIDATION_ERROR(res, `action must be one of: ${validActions.join(", ")}`);
   }
+  const action = rawAction;
+  const comments = req.body?.comments;
 
-  const doc = await prisma.document.findUnique({
-    where: { documentId: req.params.id }
-  });
+  const doc = await findDocumentByHandleOrId(req.params.id);
   if (!doc) {
     return ERR.DOCUMENT_NOT_FOUND(res, `Document ${req.params.id} not found`);
   }
@@ -3384,16 +3414,17 @@ app.put("/api/documents/:id/approve", async (req, res) => {
       }
 
       // 2. Concurrency check
-      if (currentDoc.derivativeVersion !== parseInt(expectedVersion, 10)) {
+      if (currentDoc.derivativeVersion !== expectedVersion) {
         const err = new Error(`VERSION_CONFLICT: expected version ${expectedVersion} but current version is ${currentDoc.derivativeVersion}`);
         err.code = "VERSION_CONFLICT";
         err.currentVersion = currentDoc.derivativeVersion;
         throw err;
       }
 
-      // 3. Status check: must be pending_review
-      if (currentDoc.status !== "pending_review") {
-        const err = new Error(`Document status must be 'pending_review' to be approved or rejected. Current status is '${currentDoc.status}'.`);
+      // 3. Status check: must be pending_review or ready
+      const approvableStatuses = ["pending_review", "ready"];
+      if (!approvableStatuses.includes(currentDoc.status)) {
+        const err = new Error(`Document status must be 'pending_review' or 'ready' to be approved or rejected. Current status is '${currentDoc.status}'.`);
         err.code = "INVALID_DOCUMENT_STATUS";
         throw err;
       }
@@ -3412,25 +3443,45 @@ app.put("/api/documents/:id/approve", async (req, res) => {
         auditAction = "REQUIRE_RESCAN_DOCUMENT";
       }
 
-      // 5. Create DocumentApproval record tied to exact version
+      // 5. If explicit fact approvals provided, elevate those facts to DOCTOR_APPROVED
+      if (action === "APPROVED" && ((Array.isArray(req.body?.factApprovals) && req.body.factApprovals.length > 0) || (Array.isArray(req.body?.factIds) && req.body.factIds.length > 0))) {
+        let factFilter = { documentId: currentDoc.documentId, version: currentDoc.derivativeVersion };
+        if (Array.isArray(req.body?.factIds) && req.body.factIds.length > 0) {
+          factFilter.id = { in: req.body.factIds };
+        } else if (Array.isArray(req.body?.factApprovals) && req.body.factApprovals.length > 0) {
+          const approvedIds = req.body.factApprovals
+            .filter(f => f.action !== "REJECTED")
+            .map(f => f.factId || f.id)
+            .filter(Boolean);
+          if (approvedIds.length > 0) {
+            factFilter.id = { in: approvedIds };
+          }
+        }
+        await tx.documentClinicalFact.updateMany({
+          where: factFilter,
+          data: { provenance: "DOCTOR_APPROVED" }
+        });
+      }
+
+      // 6. Create DocumentApproval record tied to exact version
       const approval = await tx.documentApproval.create({
         data: {
           documentId: currentDoc.documentId,
           approvedByUserId: auth.userCtx.id,
-          approvedVersion: parseInt(expectedVersion, 10),
+          approvedVersion: expectedVersion,
           action,
           comments: comments ? String(comments).trim() : null,
           approvedAt: new Date()
         }
       });
 
-      // 6. Update Document status
+      // 7. Update Document status
       const updatedDoc = await tx.document.update({
         where: { documentId: currentDoc.documentId },
         data: { status: newStatus }
       });
 
-      // 7. Audit log
+      // 8. Audit log
       await createAuditLog(tx, {
         actorType: "USER",
         actorUserId: auth.userCtx.id,
@@ -3440,7 +3491,7 @@ app.put("/api/documents/:id/approve", async (req, res) => {
         resourceId: String(approval.id),
         metadata: {
           documentId: currentDoc.documentId,
-          approvedVersion: parseInt(expectedVersion, 10),
+          approvedVersion: expectedVersion,
           action,
           newStatus,
           comments: comments ? String(comments).trim() : undefined,
@@ -3451,12 +3502,24 @@ app.put("/api/documents/:id/approve", async (req, res) => {
       return { updatedDoc, approval };
     });
 
+    // 9. Asynchronously synchronize approved document with runtime RAG vectorstore
+    if (action === "APPROVED") {
+      triggerRagIngest({
+        documentId: doc.documentId,
+        patientUid: doc.patientUid,
+        documentVersion: expectedVersion
+      }).catch(err => {
+        console.warn("[RAG_INGESTION:ASYNC_WARN]", err.message);
+      });
+    }
+
     logRequest(req, 200, { documentId: doc.documentId, status: result.updatedDoc.status, approvedVersion: expectedVersion, action });
     return res.json({
       success: true,
       documentId: doc.documentId,
+      documentHandle: doc.documentHandle || doc.documentId,
       status: result.updatedDoc.status,
-      approvedVersion: parseInt(expectedVersion, 10),
+      approvedVersion: expectedVersion,
       action,
       approvalId: result.approval.id
     });
@@ -3478,6 +3541,639 @@ app.put("/api/documents/:id/approve", async (req, res) => {
       }
     });
   }
+}
+
+app.put("/api/documents/:id/approve", handleDocumentApprove);
+app.post("/api/documents/:id/approve", handleDocumentApprove);
+
+// POST /api/documents/:id/retract — Doctor Document Retraction
+app.post("/api/documents/:id/retract", async (req, res) => {
+  const doc = await findDocumentByHandleOrId(req.params.id);
+  if (!doc) {
+    return ERR.DOCUMENT_NOT_FOUND(res, `Document ${req.params.id} not found`);
+  }
+
+  const auth = await authorizeClinicianForDocument(req, res, doc, { allowAdmin: true, requireDoctorOnly: false });
+  if (!auth) return;
+
+  const { reasonCode, rationale, reason } = req.body || {};
+  const clinicalRationale = rationale || reason || "Clinically retracted by physician";
+  const validReasons = ["MISTAKEN_IDENTITY", "DUPLICATE_ENTRY", "CLINICAL_ERROR", "OTHER"];
+  const code = reasonCode && validReasons.includes(reasonCode) ? reasonCode : "CLINICAL_ERROR";
+
+  try {
+    const updatedDoc = await prisma.$transaction(async (tx) => {
+      const updated = await tx.document.update({
+        where: { id: doc.id },
+        data: { status: "retracted" }
+      });
+
+      await createAuditLog(tx, {
+        actorType: "USER",
+        actorUserId: auth.userCtx.id,
+        action: "RETRACT_DOCUMENT",
+        patientUid: doc.patientUid,
+        resourceType: "Document",
+        resourceId: doc.documentId,
+        metadata: {
+          documentId: doc.documentId,
+          documentHandle: doc.documentHandle,
+          version: doc.derivativeVersion,
+          reasonCode: code,
+          rationale: clinicalRationale,
+          retractedBy: auth.userCtx.id,
+          adminReason: auth.adminReason || undefined
+        }
+      });
+
+      return updated;
+    });
+
+    logRequest(req, 200, { documentId: doc.documentId, status: "retracted" });
+    return res.json({
+      success: true,
+      documentId: doc.documentId,
+      documentHandle: doc.documentHandle || doc.documentId,
+      status: "retracted",
+      reasonCode: code,
+      rationale: clinicalRationale
+    });
+  } catch (err) {
+    logError(req, "DOCUMENT_RETRACTION_ERROR", err.message, err);
+    return res.status(500).json({
+      error: {
+        code: "INTERNAL_ERROR",
+        message: err.message || "Failed to retract document",
+        requestId: req.requestId
+      }
+    });
+  }
+});
+
+// GET /api/documents/:id/pages/:pageNumber — Authenticated Binary Streaming
+app.get("/api/documents/:id/pages/:pageNumber", async (req, res) => {
+  const pageNumber = parseInt(req.params.pageNumber, 10);
+  if (isNaN(pageNumber) || pageNumber < 1) {
+    return ERR.VALIDATION_ERROR(res, "pageNumber must be a positive integer");
+  }
+
+  if (req.query && (req.query.patientUid !== undefined || req.query.patientId !== undefined)) {
+    logRequest(req, 400, { securityViolation: "patientUid_in_query" });
+    return ERR.VALIDATION_ERROR(res, "Public document APIs do not accept patientUid or patientId in query parameters.");
+  }
+
+  const encCtx = getEncounterSessionContext(req);
+  const userCtx = getUserSessionContext(req);
+
+  if (!encCtx && !userCtx) {
+    logRequest(req, 401, { reason: "no_valid_session" });
+    return ERR.AUTHENTICATION_REQUIRED(res, "Active session required to stream document pages");
+  }
+
+  const doc = await findDocumentByHandleOrId(req.params.id);
+  if (!doc) {
+    return ERR.DOCUMENT_NOT_FOUND(res, `Document ${req.params.id} not found`);
+  }
+
+  // Caller scope authorization
+  if (encCtx) {
+    if (doc.patientUid !== encCtx.patientUid) {
+      logRequest(req, 403, { reason: "cross_patient_document_access" });
+      return ERR.PATIENT_SCOPE_MISMATCH(res, "Document does not belong to active patient context");
+    }
+  } else if (userCtx) {
+    if (userCtx.role !== "admin") {
+      const hasEncounter = await prisma.encounter.findFirst({
+        where: {
+          patientUid: doc.patientUid,
+          assignedDoctorId: userCtx.id
+        }
+      });
+      const hasCareRel = await prisma.careRelationship.findFirst({
+        where: {
+          patientUid: doc.patientUid,
+          doctorId: userCtx.id,
+          status: "active",
+          OR: [
+            { expiresAt: null },
+            { expiresAt: { gt: new Date() } }
+          ],
+          endedAt: null
+        }
+      });
+      if (!hasEncounter && !hasCareRel) {
+        logRequest(req, 403, { reason: "doctor_not_authorized_for_patient" });
+        return ERR.CLINICAL_ACCESS_DENIED(res, "Doctor is not authorized to access clinical records for this patient");
+      }
+    }
+  }
+
+  const allowedRoots = [
+    path.resolve(process.cwd(), "data", "uploads"),
+    path.resolve(process.cwd(), "storage", "documents"),
+    path.resolve(process.cwd(), "data", "documents"),
+    path.resolve(ROOT_DIR, "data", "uploads"),
+    path.resolve(ROOT_DIR, "storage", "documents"),
+    path.resolve(ROOT_DIR, "data", "documents")
+  ];
+
+  let targetFilePath = doc.filePath;
+  if (!targetFilePath) {
+    return res.status(404).json({ error: { code: "FILE_NOT_FOUND", message: "Document file path not found" } });
+  }
+
+  // Traversal attack check on raw string
+  if (targetFilePath.includes("..") || String(req.params.id).includes("..")) {
+    logRequest(req, 400, { securityViolation: "directory_traversal_attempt" });
+    return ERR.VALIDATION_ERROR(res, "Invalid document storage path. Traversal forbidden.");
+  }
+
+  // If page > 1, check for page rendered file
+  if (pageNumber > 1) {
+    const pageCandidate = path.join(path.dirname(doc.filePath), "pages", `page_${pageNumber}.png`);
+    if (fs.existsSync(pageCandidate)) {
+      targetFilePath = pageCandidate;
+    }
+  }
+
+  const resolvedPath = path.resolve(targetFilePath);
+  const isWithinAllowed = allowedRoots.some(root => resolvedPath.startsWith(root));
+  if (!isWithinAllowed && !resolvedPath.includes(doc.patientUid)) {
+    logRequest(req, 400, { securityViolation: "directory_traversal_attempt" });
+    return ERR.VALIDATION_ERROR(res, "Invalid document storage path. Traversal forbidden.");
+  }
+
+  if (!fs.existsSync(resolvedPath)) {
+    return res.status(404).json({ error: { code: "FILE_NOT_FOUND", message: "Requested page file not found on disk" } });
+  }
+
+  const ext = path.extname(resolvedPath).toLowerCase();
+  let contentType = "application/octet-stream";
+  if (ext === ".png") contentType = "image/png";
+  else if (ext === ".jpg" || ext === ".jpeg") contentType = "image/jpeg";
+  else if (ext === ".pdf") contentType = "application/pdf";
+
+  res.setHeader("Content-Type", contentType);
+  res.setHeader("Content-Disposition", "inline");
+  res.setHeader("Cache-Control", "private, no-store, max-age=0");
+  res.setHeader("X-Content-Type-Options", "nosniff");
+
+  const stream = fs.createReadStream(resolvedPath);
+  stream.on("error", (err) => {
+    logError(req, "STREAMING_ERROR", err.message, err);
+    if (!res.headersSent) {
+      res.status(500).json({ error: { code: "STREAM_FAILED", message: "Failed to stream document page" } });
+    }
+  });
+  stream.pipe(res);
+});
+
+// GET /api/doctor/queue — Real Database Doctor Queue
+app.get("/api/doctor/queue", async (req, res) => {
+  const userCtx = getUserSessionContext(req);
+  if (!userCtx) {
+    logRequest(req, 401, { reason: "unauthenticated" });
+    return ERR.AUTHENTICATION_REQUIRED(res, "Clinician session required to view doctor queue");
+  }
+  if (userCtx.role !== "doctor" && userCtx.role !== "admin") {
+    logRequest(req, 403, { reason: "unauthorized_role" });
+    return ERR.CLINICAL_ACCESS_DENIED(res, "Only authorized clinicians may view patient queue");
+  }
+
+  try {
+    const encounters = await prisma.encounter.findMany({
+      where: {
+        consultationStatus: { in: ["waiting", "in_progress", "WAITING", "IN_PROGRESS"] }
+      },
+      include: {
+        patient: true,
+        documents: true
+      },
+      orderBy: { createdAt: "asc" }
+    });
+
+    const now = Date.now();
+    const queueItems = [];
+
+    for (const enc of encounters) {
+      let caseHandle = enc.caseHandle;
+      if (!caseHandle) {
+        caseHandle = `case_${crypto.randomBytes(16).toString("hex")}`;
+        prisma.encounter.update({
+          where: { id: enc.id },
+          data: { caseHandle }
+        }).catch(() => {});
+      }
+
+      const arrivalTime = enc.createdAt || new Date();
+      const waitMinutes = Math.max(0, Math.round((now - new Date(arrivalTime).getTime()) / 60000));
+
+      let triage = "ROUTINE";
+      const complaint = (enc.chiefComplaint || enc.triageReason || "").toLowerCase();
+      if (
+        complaint.includes("chest pain") ||
+        complaint.includes("stroke") ||
+        complaint.includes("unconscious") ||
+        complaint.includes("shortness of breath") ||
+        enc.priority === "Emergency" ||
+        enc.priority === "Critical"
+      ) {
+        triage = "EMERGENCY";
+      } else if (
+        complaint.includes("fever") ||
+        complaint.includes("pain") ||
+        complaint.includes("fracture") ||
+        enc.priority === "High" ||
+        enc.priority === "Urgent"
+      ) {
+        triage = "URGENT";
+      }
+
+      queueItems.push({
+        encounterId: enc.encounterId,
+        caseHandle,
+        tokenNumber: enc.tokenNumber,
+        patientId: enc.patient?.patientId || "P-UNKNOWN",
+        patientName: enc.patient?.fullName || "Anonymous Patient",
+        patientAge: enc.patient?.age || enc.patient?.dateOfBirth || "Unknown",
+        patientGender: enc.patient?.gender || "Unknown",
+        chiefComplaint: enc.chiefComplaint || enc.triageReason || "Standard Clinical Intake",
+        status: (enc.consultationStatus || enc.status || "waiting").toLowerCase(),
+        triage,
+        priority: enc.priority || "Normal",
+        arrivalTime: arrivalTime.toISOString(),
+        waitingTimeMinutes: waitMinutes,
+        assignedDoctorId: enc.assignedDoctorId || null,
+        documentsCount: enc.documents ? enc.documents.length : 0
+      });
+    }
+
+    logRequest(req, 200, { queueCount: queueItems.length });
+    return res.json({
+      success: true,
+      count: queueItems.length,
+      queue: queueItems
+    });
+  } catch (err) {
+    logError(req, "DOCTOR_QUEUE_ERROR", err.message, err);
+    return res.status(500).json({
+      error: {
+        code: "INTERNAL_ERROR",
+        message: err.message || "Failed to retrieve doctor queue",
+        requestId: req.requestId
+      }
+    });
+  }
+});
+
+// POST /api/doctor/queue/claim — Atomic Encounter Claiming
+app.post("/api/doctor/queue/claim", async (req, res) => {
+  const userCtx = getUserSessionContext(req);
+  if (!userCtx) {
+    logRequest(req, 401, { reason: "unauthenticated" });
+    return ERR.AUTHENTICATION_REQUIRED(res, "Clinician session required to claim patient queue encounter");
+  }
+  if (userCtx.role !== "doctor" && userCtx.role !== "admin") {
+    logRequest(req, 403, { reason: "unauthorized_role" });
+    return ERR.CLINICAL_ACCESS_DENIED(res, "Only authorized physicians may claim queue encounters");
+  }
+
+  const { encounterId, caseHandle } = req.body || {};
+  const candidateId = encounterId || caseHandle;
+  if (!candidateId) {
+    return ERR.VALIDATION_ERROR(res, "encounterId or caseHandle is required in request body");
+  }
+
+  try {
+    const result = await prisma.$transaction(async (tx) => {
+      const enc = await tx.encounter.findFirst({
+        where: {
+          OR: [
+            { encounterId: String(candidateId) },
+            { caseHandle: String(candidateId) }
+          ]
+        },
+        include: { patient: true }
+      });
+
+      if (!enc) {
+        const err = new Error(`Encounter '${candidateId}' not found`);
+        err.code = "ENCOUNTER_NOT_FOUND";
+        throw err;
+      }
+
+      const waitingStatuses = ["waiting", "WAITING", "arrived", "ARRIVED"];
+      const statusLower = (enc.consultationStatus || enc.status || "").toLowerCase();
+      if (!waitingStatuses.map(s => s.toLowerCase()).includes(statusLower)) {
+        const err = new Error(`Encounter is currently in status '${enc.consultationStatus || enc.status}' and cannot be claimed`);
+        err.code = "ENCOUNTER_ALREADY_CLAIMED";
+        err.currentStatus = enc.consultationStatus || enc.status;
+        err.assignedDoctorId = enc.assignedDoctorId;
+        throw err;
+      }
+
+      const activeCaseHandle = enc.caseHandle || `case_${crypto.randomBytes(16).toString("hex")}`;
+
+      const updated = await tx.encounter.update({
+        where: { id: enc.id },
+        data: {
+          consultationStatus: "in_progress",
+          assignedDoctorId: userCtx.id,
+          caseHandle: activeCaseHandle
+        },
+        include: { patient: true }
+      });
+
+      const existingRel = await tx.careRelationship.findFirst({
+        where: {
+          patientUid: enc.patientUid,
+          doctorId: userCtx.id,
+          status: "active"
+        }
+      });
+      if (!existingRel) {
+        await tx.careRelationship.create({
+          data: {
+            patientUid: enc.patientUid,
+            doctorId: userCtx.id,
+            status: "active",
+            relationshipType: "PRIMARY_ATTENDING",
+            startedAt: new Date()
+          }
+        }).catch(() => {});
+      }
+
+      await createAuditLog(tx, {
+        actorType: "USER",
+        actorUserId: userCtx.id,
+        action: "CLAIM_ENCOUNTER",
+        patientUid: enc.patientUid,
+        resourceType: "Encounter",
+        resourceId: enc.encounterId,
+        metadata: {
+          encounterId: enc.encounterId,
+          caseHandle: activeCaseHandle,
+          claimedByDoctorId: userCtx.id
+        }
+      });
+
+      return updated;
+    });
+
+    logRequest(req, 200, { encounterId: result.encounterId, claimedBy: userCtx.id });
+    return res.json({
+      success: true,
+      encounterId: result.encounterId,
+      caseHandle: result.caseHandle,
+      status: "in_progress",
+      assignedDoctorId: userCtx.id,
+      patientName: result.patient?.fullName
+    });
+  } catch (err) {
+    if (err.code === "ENCOUNTER_ALREADY_CLAIMED") {
+      logRequest(req, 409, { encounterClaimCollision: true });
+      return res.status(409).json({
+        error: {
+          code: "ENCOUNTER_ALREADY_CLAIMED",
+          message: err.message,
+          currentStatus: err.currentStatus,
+          assignedDoctorId: err.assignedDoctorId,
+          requestId: req.requestId
+        }
+      });
+    }
+    if (err.code === "ENCOUNTER_NOT_FOUND") {
+      return res.status(404).json({
+        error: {
+          code: "ENCOUNTER_NOT_FOUND",
+          message: err.message,
+          requestId: req.requestId
+        }
+      });
+    }
+    logError(req, "ENCOUNTER_CLAIM_ERROR", err.message, err);
+    return res.status(500).json({
+      error: {
+        code: "INTERNAL_ERROR",
+        message: err.message || "Failed to claim encounter",
+        requestId: req.requestId
+      }
+    });
+  }
+});
+
+// GET /api/doctor/case/:caseHandle — Dedicated Patient Case Dossier
+app.get("/api/doctor/case/:caseHandle", async (req, res) => {
+  const caseHandle = req.params.caseHandle;
+  if (!caseHandle || typeof caseHandle !== "string") {
+    return ERR.VALIDATION_ERROR(res, "Valid caseHandle is required");
+  }
+
+  const userCtx = getUserSessionContext(req);
+  if (!userCtx) {
+    logRequest(req, 401, { reason: "unauthenticated" });
+    return ERR.AUTHENTICATION_REQUIRED(res, "Clinician session required to view patient case");
+  }
+  if (userCtx.role !== "doctor" && userCtx.role !== "admin") {
+    logRequest(req, 403, { reason: "unauthorized_role" });
+    return ERR.CLINICAL_ACCESS_DENIED(res, "Only authorized clinicians may view patient case dossiers");
+  }
+
+  const encounter = await prisma.encounter.findFirst({
+    where: {
+      OR: [
+        { caseHandle },
+        { encounterId: caseHandle }
+      ]
+    },
+    include: {
+      patient: true
+    }
+  });
+
+  if (!encounter || !encounter.patient) {
+    logRequest(req, 404, { caseHandle, reason: "case_not_found" });
+    return res.status(404).json({
+      error: {
+        code: "CASE_NOT_FOUND",
+        message: `Clinical case '${caseHandle}' not found`,
+        requestId: req.requestId
+      }
+    });
+  }
+
+  const patientUid = encounter.patientUid;
+
+  if (userCtx.role === "doctor") {
+    const isAssigned = encounter.assignedDoctorId === userCtx.id;
+    const careRel = await prisma.careRelationship.findFirst({
+      where: {
+        patientUid,
+        doctorId: userCtx.id,
+        status: "active",
+        OR: [
+          { expiresAt: null },
+          { expiresAt: { gt: new Date() } }
+        ],
+        endedAt: null
+      }
+    });
+    if (!isAssigned && !careRel) {
+      logRequest(req, 403, { caseHandle, reason: "doctor_not_assigned_to_case" });
+      return ERR.CLINICAL_ACCESS_DENIED(res, "Doctor is not assigned to this case and has no active CareRelationship with patient");
+    }
+  } else if (userCtx.role === "admin") {
+    const adminReason = req.headers["x-admin-access-reason"];
+    if (!adminReason || typeof adminReason !== "string" || adminReason.trim().length < 5) {
+      return ERR.ADMIN_ACCESS_REASON_REQUIRED(res, "Valid X-Admin-Access-Reason header is required for admin case access");
+    }
+  }
+
+  const documents = await prisma.document.findMany({
+    where: { patientUid },
+    include: {
+      pages: {
+        where: { version: 1 },
+        orderBy: { pageNumber: "asc" }
+      },
+      clinicalFacts: {
+        orderBy: { id: "asc" }
+      },
+      approvals: {
+        orderBy: { approvedAt: "desc" }
+      }
+    },
+    orderBy: { uploadDate: "desc" }
+  });
+
+  const historicalEncounters = await prisma.encounter.findMany({
+    where: { patientUid },
+    orderBy: { createdAt: "desc" }
+  });
+
+  const consent = await prisma.patientConsent.findFirst({
+    where: { patientUid },
+    orderBy: { grantedAt: "desc" }
+  });
+
+  const interviewSessions = await prisma.interviewSession.findMany({
+    where: { patientUid },
+    include: {
+      turns: { orderBy: { turnIndex: "asc" } }
+    },
+    orderBy: { createdAt: "desc" }
+  });
+
+  const dossier = {
+    caseHandle: encounter.caseHandle || caseHandle,
+    encounterId: encounter.encounterId,
+    tokenNumber: encounter.tokenNumber,
+    status: encounter.consultationStatus || encounter.status || "in_progress",
+    priority: encounter.priority || "Normal",
+    triageReason: encounter.triageReason,
+    chiefComplaint: encounter.chiefComplaint,
+    encounter: {
+      encounterId: encounter.encounterId,
+      caseHandle: encounter.caseHandle || caseHandle,
+      tokenNumber: encounter.tokenNumber,
+      status: encounter.consultationStatus || encounter.status || "in_progress",
+      priority: encounter.priority || "Normal",
+      triageReason: encounter.triageReason,
+      chiefComplaint: encounter.chiefComplaint
+    },
+    patient: {
+      patientDisplayId: encounter.patient.patientId,
+      fullName: encounter.patient.fullName,
+      age: encounter.patient.age,
+      gender: encounter.patient.gender,
+      bloodGroup: encounter.patient.bloodGroup || null,
+      phone: encounter.patient.phone || null
+    },
+    summary: {
+      narrative: encounter.doctorNotes || encounter.hpi || "Patient presented for outpatient clinical evaluation.",
+      chiefComplaint: encounter.chiefComplaint || encounter.triageReason,
+      vitalSigns: encounter.vitalSignsJson ? JSON.parse(encounter.vitalSignsJson) : null,
+      allergies: encounter.allergiesJson ? JSON.parse(encounter.allergiesJson) : [],
+      currentMedications: encounter.currentMedsJson ? JSON.parse(encounter.currentMedsJson) : [],
+      provenance: "AI_GENERATED_SUMMARY"
+    },
+    intake: {
+      chiefComplaint: encounter.chiefComplaint,
+      hpi: encounter.hpi,
+      pastHistory: encounter.pastHistory,
+      intakeConversation: encounter.intakeConversation ? JSON.parse(encounter.intakeConversation) : null,
+      interviewSessions: interviewSessions.map(s => ({
+        sessionId: s.sessionId,
+        status: s.status,
+        turns: s.turns.map(t => ({ speaker: t.speaker, content: t.content, clinicalCategory: t.clinicalCategory }))
+      })),
+      consent: consent ? {
+        consented: consent.granted,
+        consentType: consent.consentType,
+        consentedAt: consent.grantedAt
+      } : null
+    },
+    documents: documents.map(d => ({
+      documentId: d.documentId,
+      documentHandle: d.documentHandle || d.documentId,
+      fileName: d.fileName,
+      mimeType: d.mimeType,
+      status: d.status,
+      clinicalDate: d.clinicalDate,
+      uploadDate: d.uploadDate,
+      totalPages: d.totalPages,
+      derivativeVersion: d.derivativeVersion,
+      pages: d.pages.map(p => ({
+        pageNumber: p.pageNumber,
+        extractedText: p.extractedText,
+        ocrStatus: p.ocrStatus,
+        ocrConfidence: p.ocrConfidence
+      })),
+      facts: d.clinicalFacts.map(f => ({
+        id: f.id,
+        factType: f.factType,
+        factKey: f.factKey,
+        factValue: f.factValue,
+        unit: f.unit,
+        clinicalDate: f.clinicalDate,
+        confidence: f.confidence,
+        provenance: f.provenance,
+        evidenceStatus: f.evidenceStatus || "UNVERIFIED",
+        boundingBox: f.boundingBox ? (typeof f.boundingBox === "string" ? JSON.parse(f.boundingBox) : f.boundingBox) : null,
+        sourceSnippet: f.sourceSnippet || null,
+        version: f.version
+      })),
+      latestApproval: d.approvals.length > 0 ? d.approvals[0] : null
+    })),
+    history: historicalEncounters.map(e => ({
+      encounterId: e.encounterId,
+      tokenNumber: e.tokenNumber,
+      chiefComplaint: e.chiefComplaint,
+      status: e.consultationStatus || e.status,
+      date: e.createdAt,
+      provenance: e.provenance || "PATIENT_REPORTED"
+    }))
+  };
+
+  await createAuditLog(prisma, {
+    actorType: "USER",
+    actorUserId: userCtx.id,
+    action: "VIEW_PATIENT_CASE",
+    patientUid,
+    resourceType: "Encounter",
+    resourceId: encounter.encounterId,
+    metadata: {
+      caseHandle,
+      doctorRole: userCtx.role
+    }
+  });
+
+  logRequest(req, 200, { caseHandle, patient: encounter.patient.patientId });
+  return res.json({
+    success: true,
+    case: dossier,
+    ...dossier
+  });
 });
 
 // --------------------------------------------------------------------------
@@ -3492,10 +4188,10 @@ app.post("/api/rag/query", ragRateLimiter, async (req, res) => {
       return ERR.VALIDATION_ERROR(res, validation.message);
     }
 
-    const { encounterId, careRelationshipId, query, topK, year, retrievalPath } = validation;
+    const { caseHandle, encounterId, careRelationshipId, query, topK, year, retrievalPath } = validation;
 
     // 2. Authentication, role check, and clinical context authorization (derive patientUid internally)
-    const authResult = await authorizeAndResolvePatient(prisma, req, { encounterId, careRelationshipId });
+    const authResult = await authorizeAndResolvePatient(prisma, req, { caseHandle, encounterId, careRelationshipId });
     if (!authResult.authorized) {
       logRequest(req, authResult.status, { reason: authResult.message, error: authResult.error });
       if (authResult.status === 401) {
@@ -3598,7 +4294,29 @@ app.post("/api/rag/query", ragRateLimiter, async (req, res) => {
 });
 
 // --------------------------------------------------------------------------
-// 17. Global Error Handler
+// 17. Client SPA Fallback & Static Assets
+// --------------------------------------------------------------------------
+const distPath = path.resolve(__dirname, "dist");
+const rootIndexHtml = path.resolve(__dirname, "index.html");
+
+if (fs.existsSync(distPath)) {
+  app.use(express.static(distPath));
+}
+
+app.use((req, res, next) => {
+  if (req.method !== "GET") return next();
+  if (req.path.startsWith("/api")) return next();
+  if (fs.existsSync(path.join(distPath, "index.html"))) {
+    return res.sendFile(path.join(distPath, "index.html"));
+  }
+  if (fs.existsSync(rootIndexHtml)) {
+    return res.sendFile(rootIndexHtml);
+  }
+  return res.status(200).send("<!DOCTYPE html><html><body><div id='root'></div></body></html>");
+});
+
+// --------------------------------------------------------------------------
+// 18. Global Error Handler
 // --------------------------------------------------------------------------
 // eslint-disable-next-line no-unused-vars
 app.use((err, req, res, next) => {
