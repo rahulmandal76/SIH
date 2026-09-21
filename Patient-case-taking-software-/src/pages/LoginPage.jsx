@@ -114,7 +114,7 @@ export const LoginPage = ({ initialRole = "doctor", onNavigate }) => {
             window.history.pushState(null, "", "/doctor/queue");
             window.dispatchEvent(new Event("popstate"));
           }
-        }, 500);
+        }, 1200);
       } else {
         setLoginErrorMsg(data?.error?.message || "Invalid doctor credentials or chamber authorization failed.");
       }
