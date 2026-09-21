@@ -392,11 +392,12 @@ Based on the patient's actual reported statements, generate the single NEXT ques
         }
 
         const candidateModels = [
-          config.model || "gemini-3.5-flash-lite",
-          "gemini-3.5-flash-lite",
-          "gemini-flash-lite-latest",
-          "gemini-3.8-flash",
-          "gemini-flash-latest"
+          config.model || "gemini-2.5-flash",
+          "gemini-2.5-flash",
+          "gemini-2.0-flash",
+          "gemini-1.5-flash",
+          "gemini-flash-latest",
+          "gemini-3.5-flash-lite"
         ];
         const modelsToTry = [...new Set(candidateModels)];
 
