@@ -217,6 +217,7 @@ class IngestRequest(BaseModel):
 
 # ─── Endpoints ────────────────────────────────────────────────────────────────
 
+@app.get("/health")
 @app.get("/api/internal/health")
 async def health():
     """Liveness probe — no auth required."""

@@ -47,7 +47,7 @@ services:
     name: medsync-rag
     runtime: python
     plan: free
-    buildCommand: pip install -r services/rag_service/requirements.txt
+    buildCommand: pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu && pip install --no-cache-dir -r services/rag_service/requirements.txt
     startCommand: uvicorn services.rag_service.main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /health
     envVars:
