@@ -15,13 +15,38 @@ const ALLOWED_ORIGINS = new Set([
   "http://127.0.0.1:5173"
 ]);
 
-export function isAllowedOrigin(originHeader) {
+export function isAllowedOrigin(originHeader, req = null) {
   if (!originHeader) return true; // Checked via other headers or same-origin
   try {
     const url = new URL(originHeader);
     const normalized = `${url.protocol}//${url.host}`;
     if (ALLOWED_ORIGINS.has(normalized)) return true;
     if (url.hostname === "localhost" || url.hostname === "127.0.0.1") return true;
+
+    // Production domains & Render / Vercel cloud deployments
+    if (url.hostname.endsWith(".onrender.com")) return true;
+    if (url.hostname.endsWith(".vercel.app")) return true;
+
+    // Same-origin verification against current request host
+    if (req) {
+      const host = req.get("host");
+      if (host && (url.host === host || url.hostname === host.split(":")[0])) return true;
+    }
+
+    if (process.env.RENDER_EXTERNAL_URL) {
+      try {
+        const renderUrl = new URL(process.env.RENDER_EXTERNAL_URL);
+        if (url.host === renderUrl.host) return true;
+      } catch (e) {
+        // ignore invalid URL
+      }
+    }
+
+    if (process.env.ALLOWED_ORIGINS) {
+      const extraOrigins = process.env.ALLOWED_ORIGINS.split(",").map(o => o.trim());
+      if (extraOrigins.includes(normalized) || extraOrigins.includes(url.hostname) || extraOrigins.includes(url.host)) return true;
+    }
+
     return false;
   } catch (e) {
     return false;
@@ -40,7 +65,7 @@ export function csrfProtection(req, res, next) {
   const referer = req.headers["referer"];
 
   // 1. Origin / Referer validation when present
-  if (origin && !isAllowedOrigin(origin)) {
+  if (origin && !isAllowedOrigin(origin, req)) {
     return res.status(403).json({
       error: {
         code: "CSRF_VIOLATION",
@@ -50,7 +75,7 @@ export function csrfProtection(req, res, next) {
     });
   }
 
-  if (!origin && referer && !isAllowedOrigin(referer)) {
+  if (!origin && referer && !isAllowedOrigin(referer, req)) {
     return res.status(403).json({
       error: {
         code: "CSRF_VIOLATION",
