@@ -1,0 +1,71 @@
+services:
+  # --------------------------------------------------------------------------
+  # 1. MedSync API Gateway & Unified Frontend SPA (Node.js / Express + React)
+  # --------------------------------------------------------------------------
+  - type: web
+    name: medsync-api
+    runtime: node
+    plan: starter
+    buildCommand: npm install && cd Patient-case-taking-software- && npm install && npm run build && cd .. && npx prisma generate --schema=prisma/schema.prisma
+    startCommand: node Patient-case-taking-software-/server.js
+    healthCheckPath: /api/health/live
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_PROVIDER
+        value: postgresql
+      - key: DATABASE_URL
+        fromDatabase:
+          name: medsync-db
+          property: connectionString
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GEMINI_API_KEY_2
+        sync: false
+      - key: RAG_SERVICE_URL
+        fromService:
+          type: web
+          name: medsync-rag
+          property: host
+      - key: RAG_SERVICE_INTERNAL_TOKEN
+        generateValue: true
+      - key: DOCUMENT_AI_PROVIDER
+        value: gemini
+      - key: DOCUMENT_AI_MODEL
+        value: gemini-2.5-flash
+      - key: INTERVIEW_AI_PROVIDER
+        value: gemini
+      - key: INTERVIEW_AI_MODEL
+        value: gemini-2.5-flash
+
+  # --------------------------------------------------------------------------
+  # 2. Longitudinal Clinical RAG Microservice (Python / FastAPI + Groq)
+  # --------------------------------------------------------------------------
+  - type: web
+    name: medsync-rag
+    runtime: python
+    plan: starter
+    buildCommand: pip install -r services/rag_service/requirements.txt
+    startCommand: uvicorn services.rag_service.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: GROQ_API_KEY
+        sync: false
+      - key: RAG_SERVICE_INTERNAL_TOKEN
+        fromService:
+          type: web
+          name: medsync-api
+          envVarKey: RAG_SERVICE_INTERNAL_TOKEN
+      - key: VECTOR_INDEX_ROOT
+        value: ./storage/vector_index
+
+# ----------------------------------------------------------------------------
+# 3. Managed PostgreSQL Database for Persistent Clinical Records
+# ----------------------------------------------------------------------------
+databases:
+  - name: medsync-db
+    databaseName: medsync
+    user: medsync
+    plan: starter

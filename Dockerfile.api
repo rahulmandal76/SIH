@@ -8,10 +8,10 @@ ENV NODE_ENV=production
 # Install dependencies
 COPY package*.json ./
 COPY Patient-case-taking-software-/package*.json ./Patient-case-taking-software-/
-COPY Patient-case-taking-software-/prisma ./Patient-case-taking-software-/prisma/
+COPY prisma/ ./prisma/
 
-# Install and generate Prisma Client
-RUN cd Patient-case-taking-software- && npm ci && npx prisma generate
+# Install dependencies, build frontend, and generate Prisma Client
+RUN npm ci && cd Patient-case-taking-software- && npm ci && npm run build && cd .. && npx prisma generate --schema=prisma/schema.prisma
 
 # Copy application code
 COPY Patient-case-taking-software-/ ./Patient-case-taking-software-/

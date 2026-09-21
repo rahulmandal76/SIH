@@ -55,3 +55,8 @@ data/
 # Playwright
 test-results/
 playwright-report/
+
+# Scratch & Temporary Dev Backups
+backups/
+scratch/
+implementation_plan*.md

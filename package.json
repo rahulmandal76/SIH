@@ -5,6 +5,8 @@
   "description": "Unified Healthcare Intelligence Platform combining MedSync Clinical Kiosk and AuraHealth Nexus Longitudinal RAG",
   "type": "module",
   "scripts": {
+    "build": "npm --prefix Patient-case-taking-software- run build",
+    "start": "node Patient-case-taking-software-/server.js",
     "dev:web": "npm --prefix Patient-case-taking-software- run dev",
     "dev:api": "node Patient-case-taking-software-/server.js",
     "dev:rag": "uvicorn services.rag_service.main:app --host 127.0.0.1 --port 8000 --reload",
