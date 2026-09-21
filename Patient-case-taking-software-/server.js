@@ -4534,7 +4534,7 @@ seedDevUsers(prisma).catch(err => {
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   app.listen(PORT, () => {
-    const hasGeminiKey = !process.env.GEMINI_API_KEY;
+    const hasGeminiKey = Boolean(process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY !== "your_gemini_api_key_here");
     console.log(`[MedSync Backend Server] Running on http://localhost:${PORT}`);
     console.log(`[Config] Database provider: ${process.env.DATABASE_PROVIDER || "sqlite"}`);
     console.log(`[Config] Gemini key configured: ${hasGeminiKey}`);

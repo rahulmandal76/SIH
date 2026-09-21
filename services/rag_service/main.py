@@ -36,6 +36,12 @@ _REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
+try:
+    from dotenv import load_dotenv
+    load_dotenv(os.path.join(_REPO_ROOT, ".env"))
+except ImportError:
+    pass
+
 from services.rag_service.generator import ClinicalGenerator, extract_citations
 from services.rag_service.retriever import analyze_query, dual_path_retrieve
 from services.rag_service.vectorstore import PatientVectorStore, validate_patient_uid
