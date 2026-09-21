@@ -22,6 +22,7 @@ import crypto from "crypto";
 import { GoogleGenAI } from "@google/genai";
 import { extractClinicalDate } from "./documentIngestion.js";
 import { ClinicalFactSchema, PROVENANCE_VALUES } from "./clinicalFactExtractor.js";
+import { getGeminiApiKeys, executeWithGeminiKeyFailover } from "./geminiKeyRotator.js";
 
 // Runtime configuration parameters (zero hardcoded model strings)
 export function getAiConfig() {
@@ -165,14 +166,17 @@ export class DocumentAiExtractor {
     const config = getAiConfig();
     const startTime = Date.now();
 
-    // If Gemini API key is configured, use official GoogleGenAI
-    if (config.apiKey && config.apiKey.trim().length > 0) {
+    // If Gemini API keys are configured, use official GoogleGenAI with key rotation & failover
+    const keys = getGeminiApiKeys();
+    if (keys.length > 0) {
       try {
-        const geminiResult = await this._callGeminiExtractor({
-          filePath,
-          rawOcrText,
-          mimeType,
-          config
+        const geminiResult = await executeWithGeminiKeyFailover(async (apiKey) => {
+          return await this._callGeminiExtractor({
+            filePath,
+            rawOcrText,
+            mimeType,
+            config: { ...config, apiKey }
+          });
         });
 
         const durationMs = Date.now() - startTime;
@@ -262,19 +266,22 @@ Return a JSON object with:
 
     parts.push({ text: userPrompt });
 
-    const response = await ai.models.generateContent({
-      model: config.model,
-      contents: parts,
-      config: {
-        systemInstruction,
-        temperature: 0.1,
-        responseMimeType: "application/json"
-      }
-    });
+    return await executeWithGeminiKeyFailover(async (activeApiKey) => {
+      const ai = new GoogleGenAI({ apiKey: activeApiKey });
+      const response = await ai.models.generateContent({
+        model: config.model,
+        contents: parts,
+        config: {
+          systemInstruction,
+          temperature: 0.1,
+          responseMimeType: "application/json"
+        }
+      });
 
-    const responseText = response.text || "{}";
-    const cleaned = responseText.replace(/```json/gi, "").replace(/```/g, "").trim();
-    return JSON.parse(cleaned);
+      const responseText = response.text || "{}";
+      const cleaned = responseText.replace(/```json/gi, "").replace(/```/g, "").trim();
+      return JSON.parse(cleaned);
+    });
   }
 
   /**

@@ -1,16 +1,19 @@
 import crypto from "crypto";
 import { GoogleGenAI } from "@google/genai";
+import { getGeminiApiKeys, executeWithGeminiKeyFailover } from "./geminiKeyRotator.js";
 
 // --------------------------------------------------------------------------
 // Runtime Configuration for Production Intake AI
 // --------------------------------------------------------------------------
 export function getIntakeAiConfig() {
+  const keys = getGeminiApiKeys();
   return {
     provider: process.env.INTERVIEW_AI_PROVIDER || process.env.DOCUMENT_AI_PROVIDER || "gemini",
     model: process.env.INTERVIEW_AI_MODEL || "gemini-3.5-flash-lite",
     timeoutMs: parseInt(process.env.INTERVIEW_AI_TIMEOUT_MS || process.env.DOCUMENT_AI_TIMEOUT_MS || "15000", 10),
     maxRetries: parseInt(process.env.INTERVIEW_AI_MAX_RETRIES || "2", 10),
-    apiKey: process.env.GEMINI_API_KEY || ""
+    apiKey: keys[0] || "",
+    apiKeys: keys
   };
 }
 
@@ -378,8 +381,12 @@ Based on the patient's actual reported statements, generate the single NEXT ques
         });
         responseText = res.text || "{}";
       } else {
-        if (!config.apiKey || config.apiKey === "your_gemini_api_key_here") {
-          const err = new Error("AI_UNAVAILABLE: Gemini API key is not configured for production intake");
+        const availableKeys = (config.apiKeys && config.apiKeys.length > 0)
+          ? config.apiKeys
+          : getGeminiApiKeys();
+
+        if (availableKeys.length === 0) {
+          const err = new Error("AI_UNAVAILABLE: No Gemini API keys configured for production intake");
           err.code = "AI_UNAVAILABLE";
           throw err;
         }
@@ -393,39 +400,35 @@ Based on the patient's actual reported statements, generate the single NEXT ques
         ];
         const modelsToTry = [...new Set(candidateModels)];
 
-        let lastError = null;
-        for (const currentModel of modelsToTry) {
-          for (let attempt = 1; attempt <= 2; attempt++) {
-            try {
-              const ai = new GoogleGenAI({ apiKey: config.apiKey });
-              const res = await ai.models.generateContent({
-                model: currentModel,
-                contents: [{ text: userPrompt }],
-                config: {
-                  systemInstruction,
-                  temperature: 0.2,
-                  responseMimeType: "application/json"
+        responseText = await executeWithGeminiKeyFailover(async (activeApiKey, keyIdx, totalKeys) => {
+          let lastModelError = null;
+          for (const currentModel of modelsToTry) {
+            for (let attempt = 1; attempt <= 2; attempt++) {
+              try {
+                const ai = new GoogleGenAI({ apiKey: activeApiKey });
+                const res = await ai.models.generateContent({
+                  model: currentModel,
+                  contents: [{ text: userPrompt }],
+                  config: {
+                    systemInstruction,
+                    temperature: 0.2,
+                    responseMimeType: "application/json"
+                  }
+                });
+                return res.text || "{}";
+              } catch (err) {
+                lastModelError = err;
+                const isSpike = err.status === 503 || err.message?.includes("503") || err.message?.includes("high demand") || err.message?.includes("temporary");
+                if (isSpike && attempt < 2) {
+                  await new Promise(r => setTimeout(r, 1200));
+                  continue;
                 }
-              });
-              responseText = res.text || "{}";
-              lastError = null;
-              break;
-            } catch (err) {
-              lastError = err;
-              const isSpike = err.status === 503 || err.message?.includes("503") || err.message?.includes("high demand") || err.message?.includes("temporary");
-              if (isSpike && attempt < 2) {
-                await new Promise(r => setTimeout(r, 1200));
-                continue;
+                break;
               }
-              break;
             }
           }
-          if (responseText) break;
-        }
-
-        if (!responseText && lastError) {
-          throw lastError;
-        }
+          throw lastModelError || new Error("All candidate models failed for key");
+        }, { explicitKeys: availableKeys });
       }
 
       const cleaned = responseText.replace(/```json/gi, "").replace(/```/g, "").trim();

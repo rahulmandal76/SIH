@@ -74,6 +74,7 @@ import { evaluateAbhaStatus, validateAbhaInvariant } from "./server/abdmAdapter.
 import { csrfProtection } from "./server/csrf.js";
 import { createAuditLog } from "./server/audit.js";
 import { InterviewPlanner } from "./server/interviewPlanner.js";
+import { getGeminiApiKeys, executeWithGeminiKeyFailover } from "./server/geminiKeyRotator.js";
 import multer from "multer";
 import { DocumentIngestionService, MAX_UPLOAD_BYTES } from "./server/documentIngestion.js";
 import { DocumentOCRWorker } from "./server/ocrWorker.js";
@@ -1622,61 +1623,70 @@ function parseGeminiOptions(text) {
 }
 
 async function callGemini(payload) {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) throw new Error("GEMINI_API_KEY not configured");
+  const keys = getGeminiApiKeys();
+  if (keys.length === 0) throw new Error("GEMINI_API_KEY not configured");
 
-  const genAI = new GoogleGenerativeAI(apiKey);
+  return await executeWithGeminiKeyFailover(async (apiKey) => {
+    const genAI = new GoogleGenerativeAI(apiKey);
 
-  for (const modelName of CANDIDATE_MODELS) {
-    try {
-      const model = genAI.getGenerativeModel({
-        model: modelName,
-        systemInstruction: SYSTEM_PROMPT
-      });
-
-      const contents = [...payload.recentHistory];
-      if (payload.clinicalContext && contents.length === 0) {
-        contents.push({
-          role: "user",
-          parts: [{ text: `[Clinical context: ${payload.clinicalContext}]\n${payload.currentMessage}` }]
-        });
-      } else {
-        contents.push({ role: "user", parts: [{ text: payload.currentMessage }] });
-      }
-
-      const timeoutPromise = new Promise((_, reject) =>
-        setTimeout(() => reject(new Error("GEMINI_TIMEOUT")), GEMINI_TIMEOUT_MS)
-      );
-
-      const responsePromise = model.generateContent({
-        contents,
-        generationConfig: { maxOutputTokens: 120, temperature: 0.3 }
-      });
-
-      const result = await Promise.race([responsePromise, timeoutPromise]);
-      const replyText = result.response.text().trim();
-
-      if (replyText) {
-        const { cleanText, options } = parseGeminiOptions(replyText);
-        return {
-          text: cleanText,
-          options: options.length > 0 ? options : ["हाँ, यह है", "नहीं, ऐसा नहीं", "कुछ समय से", "पता नहीं"],
+    for (const modelName of CANDIDATE_MODELS) {
+      try {
+        const model = genAI.getGenerativeModel({
           model: modelName,
-          source: "gemini"
-        };
-      }
-    } catch (err) {
-      if (err.message === "GEMINI_TIMEOUT") {
-        throw { code: "AI_PROVIDER_TIMEOUT", message: "Gemini request timed out", model: modelName };
-      }
-      const msg = err.message || "";
-      if (msg.includes("429") || msg.toLowerCase().includes("rate")) {
-        throw { code: "AI_PROVIDER_RATE_LIMITED", message: "Gemini rate limit exceeded", model: modelName };
+          systemInstruction: SYSTEM_PROMPT
+        });
+
+        const contents = [...payload.recentHistory];
+        if (payload.clinicalContext && contents.length === 0) {
+          contents.push({
+            role: "user",
+            parts: [{ text: `[Clinical context: ${payload.clinicalContext}]\n${payload.currentMessage}` }]
+          });
+        } else {
+          contents.push({ role: "user", parts: [{ text: payload.currentMessage }] });
+        }
+
+        const timeoutPromise = new Promise((_, reject) =>
+          setTimeout(() => reject(new Error("GEMINI_TIMEOUT")), GEMINI_TIMEOUT_MS)
+        );
+
+        const responsePromise = model.generateContent({
+          contents,
+          generationConfig: { maxOutputTokens: 120, temperature: 0.3 }
+        });
+
+        const result = await Promise.race([responsePromise, timeoutPromise]);
+        const replyText = result.response.text().trim();
+
+        if (replyText) {
+          const { cleanText, options } = parseGeminiOptions(replyText);
+          return {
+            text: cleanText,
+            options: options.length > 0 ? options : ["हाँ, यह है", "नहीं, ऐसा नहीं", "कुछ समय से", "पता नहीं"],
+            model: modelName,
+            source: "gemini"
+          };
+        }
+      } catch (err) {
+        if (err.message === "GEMINI_TIMEOUT") {
+          throw { code: "AI_PROVIDER_TIMEOUT", message: "Gemini request timed out", model: modelName };
+        }
+        const msg = err.message || "";
+        if (msg.includes("429") || msg.toLowerCase().includes("rate") || msg.includes("RESOURCE_EXHAUSTED")) {
+          const e = new Error(msg);
+          e.status = 429;
+          throw e;
+        }
+        if (err.status === 503 || msg.includes("503") || msg.includes("high demand")) {
+          const e = new Error(msg);
+          e.status = 503;
+          throw e;
+        }
+        continue;
       }
     }
-  }
-
-  throw { code: "AI_PROVIDER_UNAVAILABLE", message: "All Gemini models unavailable" };
+    throw { code: "AI_PROVIDER_UNAVAILABLE", message: "All Gemini models unavailable" };
+  });
 }
 
 app.post("/api/ai/intake-question", aiRateLimiter, async (req, res) => {
@@ -4556,10 +4566,11 @@ seedDevUsers(prisma).catch(err => {
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   app.listen(PORT, () => {
-    const hasGeminiKey = Boolean(process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY !== "your_gemini_api_key_here");
+    const geminiKeys = getGeminiApiKeys();
+    const hasGeminiKey = geminiKeys.length > 0;
     console.log(`[MedSync Backend Server] Running on http://localhost:${PORT}`);
     console.log(`[Config] Database provider: ${process.env.DATABASE_PROVIDER || "sqlite"}`);
-    console.log(`[Config] Gemini key configured: ${hasGeminiKey}`);
+    console.log(`[Config] Gemini key configured: ${hasGeminiKey} (${geminiKeys.length} key${geminiKeys.length === 1 ? "" : "s"} active in pool)`);
   });
 }
 

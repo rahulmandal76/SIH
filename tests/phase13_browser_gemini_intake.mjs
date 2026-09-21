@@ -22,24 +22,44 @@ async function runBrowserIntakeTest() {
   console.log(`[Backend Server] listening on http://127.0.0.1:${backendPort}`);
 
   // 2. Vite Dev Server
-  const vitePath = path.resolve("Patient-case-taking-software-/node_modules/vite/dist/node/index.js");
-  const { createServer: createViteServer } = await import(`file:///${vitePath.replace(/\\/g, "/")}`);
-  const viteServer = await createViteServer({
-    root: path.resolve("Patient-case-taking-software-"),
-    server: {
-      port: 0,
-      host: "127.0.0.1",
-      proxy: {
-        "/api": {
-          target: `http://127.0.0.1:${backendPort}`,
-          changeOrigin: true
+  let vitePort = 5173;
+  let viteServer = null;
+  let useExistingVite = false;
+
+  try {
+    const checkRes = await new Promise((res, rej) => {
+      const req = http.get("http://localhost:5173", r => res(r.statusCode));
+      req.on("error", rej);
+      setTimeout(() => rej(new Error("timeout")), 1000);
+    });
+    if (checkRes === 200) {
+      useExistingVite = true;
+      console.log(`[Vite UI Server] Reusing existing Vite server at http://localhost:5173`);
+    }
+  } catch (_) {
+    // Not running
+  }
+
+  if (!useExistingVite) {
+    const vitePath = path.resolve("Patient-case-taking-software-/node_modules/vite/dist/node/index.js");
+    const { createServer: createViteServer } = await import(`file:///${vitePath.replace(/\\/g, "/")}`);
+    viteServer = await createViteServer({
+      root: path.resolve("Patient-case-taking-software-"),
+      server: {
+        port: 0,
+        host: "127.0.0.1",
+        proxy: {
+          "/api": {
+            target: `http://127.0.0.1:${backendPort}`,
+            changeOrigin: true
+          }
         }
       }
-    }
-  });
-  await viteServer.listen();
-  const vitePort = viteServer.config.server.port;
-  console.log(`[Vite UI Server] listening on http://127.0.0.1:${vitePort}`);
+    });
+    await viteServer.listen();
+    vitePort = viteServer.config.server.port;
+    console.log(`[Vite UI Server] listening on http://127.0.0.1:${vitePort}`);
+  }
 
   // 3. Configure Mock Gemini Boundary for Deterministic Contract Validation (Rule 7)
   const recordedPrompts = [];
@@ -119,19 +139,51 @@ async function runBrowserIntakeTest() {
       }
     });
 
+    const hostDomain = useExistingVite ? "localhost" : "127.0.0.1";
+    const baseUrl = `http://${hostDomain}:${vitePort}`;
     const encToken = createEncounterSession(patientUid, encounterId);
+
     await context.addCookies([
       {
         name: "ms_encounter_session",
         value: encToken,
-        domain: "127.0.0.1",
+        domain: hostDomain,
         path: "/"
       }
     ]);
 
+    if (useExistingVite) {
+      await page.route("**/api/**", async (route) => {
+        const req = route.request();
+        const url = new URL(req.url());
+        const targetUrl = `http://127.0.0.1:${backendPort}${url.pathname}${url.search}`;
+        const headers = { ...req.headers() };
+        headers["host"] = `127.0.0.1:${backendPort}`;
+
+        const postData = req.postDataBuffer();
+        try {
+          const response = await fetch(targetUrl, {
+            method: req.method(),
+            headers,
+            body: postData
+          });
+          const bodyBuffer = await response.arrayBuffer();
+          const responseHeaders = {};
+          response.headers.forEach((v, k) => { responseHeaders[k] = v; });
+          await route.fulfill({
+            status: response.status,
+            headers: responseHeaders,
+            body: Buffer.from(bodyBuffer)
+          });
+        } catch (err) {
+          await route.abort();
+        }
+      });
+    }
+
     // Navigate directly to /kiosk/intake
-    await page.goto(`http://127.0.0.1:${vitePort}/kiosk/intake`, { waitUntil: "domcontentloaded" });
-    console.log("[Browser] Navigated directly to /kiosk/intake");
+    await page.goto(`${baseUrl}/kiosk/intake`, { waitUntil: "domcontentloaded" });
+    console.log(`[Browser] Navigated directly to ${baseUrl}/kiosk/intake`);
 
     // Wait for the intake input
     await page.waitForSelector("input[placeholder*='तकलीफ']", { timeout: 10000 });
@@ -223,7 +275,7 @@ async function runBrowserIntakeTest() {
   } finally {
     await browser.close();
     interviewPlanner.setGenAiClient(null);
-    await viteServer.close();
+    if (viteServer) await viteServer.close();
     await new Promise(r => expressServer.close(r));
     await disconnectPrisma();
   }
