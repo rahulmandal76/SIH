@@ -2167,6 +2167,56 @@ app.post("/api/intake/interview/submit", async (req, res) => {
   }
 });
 
+// POST /api/intake/consent — Persist Patient Digital Consent
+app.post("/api/intake/consent", async (req, res) => {
+  const encCtx = getEncounterSessionContext(req);
+  if (!encCtx) {
+    logRequest(req, 401, { reason: "no_encounter_session" });
+    return ERR.AUTHENTICATION_REQUIRED(res, "Active patient encounter session required to record consent");
+  }
+
+  const { consentType = "kiosk_intake_and_ai", granted = true, language = "Hindi" } = req.body || {};
+
+  try {
+    const consent = await prisma.patientConsent.create({
+      data: {
+        patientUid: encCtx.patientUid,
+        consentType,
+        purpose: "Patient authorization for AI clinical intake, document OCR, and doctor review",
+        policyVersion: "v2.5",
+        granted: Boolean(granted),
+        capturedByType: "kiosk_self",
+        source: `medsync_kiosk_${language}`
+      }
+    });
+
+    await createAuditLog(prisma, {
+      actorType: "DEVICE",
+      action: "RECORD_PATIENT_CONSENT",
+      patientUid: encCtx.patientUid,
+      resourceType: "PatientConsent",
+      resourceId: String(consent.id),
+      metadata: { consentType, granted, language }
+    });
+
+    logRequest(req, 201, { consentId: consent.id, granted: consent.granted });
+    return res.status(201).json({
+      success: true,
+      consent: {
+        id: consent.id,
+        consentType: consent.consentType,
+        granted: consent.granted,
+        grantedAt: consent.grantedAt
+      }
+    });
+  } catch (err) {
+    logError(req, "CONSENT_RECORD_ERROR", err.message, err);
+    return res.status(500).json({
+      error: { code: "INTERNAL_ERROR", message: "Failed to persist patient consent", requestId: req.requestId }
+    });
+  }
+});
+
 // --------------------------------------------------------------------------
 // 16. Document Ingestion, File Storage & Background OCR Engine (Phase 5B)
 // --------------------------------------------------------------------------
@@ -4174,6 +4224,157 @@ app.get("/api/doctor/case/:caseHandle", async (req, res) => {
     case: dossier,
     ...dossier
   });
+});
+
+// POST /api/doctor/case/:caseHandle/clinical-notes — Clinician Entered Information
+app.post("/api/doctor/case/:caseHandle/clinical-notes", async (req, res) => {
+  const caseHandle = req.params.caseHandle;
+  const userCtx = getUserSessionContext(req);
+  if (!userCtx) {
+    logRequest(req, 401, { reason: "unauthenticated" });
+    return ERR.AUTHENTICATION_REQUIRED(res, "Clinician session required to enter clinical notes");
+  }
+  if (userCtx.role !== "doctor" && userCtx.role !== "admin") {
+    logRequest(req, 403, { reason: "unauthorized_role" });
+    return ERR.CLINICAL_ACCESS_DENIED(res, "Only authorized clinicians may enter clinical notes");
+  }
+
+  const { notes, diagnosis, treatmentPlan, facts } = req.body || {};
+  if (!notes && !diagnosis && !treatmentPlan && (!facts || !facts.length)) {
+    return ERR.VALIDATION_ERROR(res, "At least one of notes, diagnosis, treatmentPlan, or facts must be provided");
+  }
+
+  const encounter = await prisma.encounter.findFirst({
+    where: { OR: [{ caseHandle }, { encounterId: caseHandle }] },
+    include: { patient: true }
+  });
+  if (!encounter) {
+    return res.status(404).json({ error: { code: "CASE_NOT_FOUND", message: `Case ${caseHandle} not found` } });
+  }
+
+  if (userCtx.role === "doctor") {
+    const isAssigned = encounter.assignedDoctorId === userCtx.id;
+    const careRel = await prisma.careRelationship.findFirst({
+      where: { patientUid: encounter.patientUid, doctorId: userCtx.id, status: "active", endedAt: null }
+    });
+    if (!isAssigned && !careRel) {
+      return ERR.CLINICAL_ACCESS_DENIED(res, "Doctor is not assigned to this case");
+    }
+  }
+
+  try {
+    const updatedNotes = notes
+      ? (encounter.doctorNotes ? `${encounter.doctorNotes}\n\n[Dr. ${userCtx.name}]: ${notes}` : `[Dr. ${userCtx.name}]: ${notes}`)
+      : encounter.doctorNotes;
+
+    const updatedEncounter = await prisma.encounter.update({
+      where: { id: encounter.id },
+      data: { doctorNotes: updatedNotes }
+    });
+
+    let doc = await prisma.document.findFirst({
+      where: { encounterId: encounter.encounterId, documentType: "doctor_consultation_notes" }
+    });
+    if (!doc) {
+      doc = await prisma.document.create({
+        data: {
+          documentId: `DOC-${new Date().getFullYear()}-DOCNOTE-${crypto.randomBytes(3).toString("hex").toUpperCase()}`,
+          documentHandle: `doc_${crypto.randomBytes(16).toString("hex")}`,
+          patientUid: encounter.patientUid,
+          encounterId: encounter.encounterId,
+          fileName: `Physician_Consultation_Notes_${encounter.tokenNumber}.txt`,
+          filePath: path.join("storage", "documents", encounter.patientUid, `doctor_notes_${encounter.encounterId}.txt`),
+          fileSize: 512,
+          mimeType: "text/plain",
+          documentType: "doctor_consultation_notes",
+          status: "approved",
+          provenance: "DOCTOR_ENTERED"
+        }
+      });
+    }
+
+    const createdFacts = [];
+    if (Array.isArray(facts) && facts.length > 0) {
+      for (const f of facts) {
+        const created = await prisma.documentClinicalFact.create({
+          data: {
+            documentId: doc.documentId,
+            patientUid: encounter.patientUid,
+            pageNumber: 1,
+            factType: f.factType || "diagnosis",
+            factKey: f.factKey,
+            factValue: f.factValue,
+            unit: f.unit || null,
+            clinicalDate: new Date(),
+            confidence: 1.0,
+            provenance: "DOCTOR_ENTERED",
+            evidenceStatus: "VERIFIED",
+            sourceSnippet: `Directly entered by Dr. ${userCtx.name}`
+          }
+        });
+        createdFacts.push(created);
+      }
+    } else {
+      if (diagnosis) {
+        const diagFact = await prisma.documentClinicalFact.create({
+          data: {
+            documentId: doc.documentId,
+            patientUid: encounter.patientUid,
+            pageNumber: 1,
+            factType: "diagnosis",
+            factKey: "Clinical Diagnosis",
+            factValue: String(diagnosis),
+            clinicalDate: new Date(),
+            confidence: 1.0,
+            provenance: "DOCTOR_ENTERED",
+            evidenceStatus: "VERIFIED",
+            sourceSnippet: `Entered by Dr. ${userCtx.name}`
+          }
+        });
+        createdFacts.push(diagFact);
+      }
+      if (treatmentPlan) {
+        const rxFact = await prisma.documentClinicalFact.create({
+          data: {
+            documentId: doc.documentId,
+            patientUid: encounter.patientUid,
+            pageNumber: 1,
+            factType: "treatment_plan",
+            factKey: "Treatment / Rx Plan",
+            factValue: String(treatmentPlan),
+            clinicalDate: new Date(),
+            confidence: 1.0,
+            provenance: "DOCTOR_ENTERED",
+            evidenceStatus: "VERIFIED",
+            sourceSnippet: `Prescribed by Dr. ${userCtx.name}`
+          }
+        });
+        createdFacts.push(rxFact);
+      }
+    }
+
+    await createAuditLog(prisma, {
+      actorType: "USER",
+      actorUserId: userCtx.id,
+      action: "ADD_DOCTOR_CLINICAL_NOTES",
+      patientUid: encounter.patientUid,
+      resourceType: "Encounter",
+      resourceId: encounter.encounterId,
+      metadata: { caseHandle, doctorName: userCtx.name, factsCount: createdFacts.length }
+    });
+
+    logRequest(req, 201, { caseHandle, doctorId: userCtx.id });
+    return res.status(201).json({
+      success: true,
+      doctorNotes: updatedEncounter.doctorNotes,
+      facts: createdFacts
+    });
+  } catch (err) {
+    logError(req, "DOCTOR_NOTES_ERROR", err.message, err);
+    return res.status(500).json({
+      error: { code: "INTERNAL_ERROR", message: "Failed to persist clinician notes", requestId: req.requestId }
+    });
+  }
 });
 
 // --------------------------------------------------------------------------

@@ -36,7 +36,15 @@ export const DocumentScannerPage = ({ onNavigate }) => {
   const [errorMessage, setErrorMessage] = useState("");
   const [uploadedHandle, setUploadedHandle] = useState(null);
 
+  // Phase 13 Multi-Image & Page Staging State
+  const [stagedPages, setStagedPages] = useState([]);
+  const [activePageIndex, setActivePageIndex] = useState(0);
+  const [documentVersionState, setDocumentVersionState] = useState("Draft v1");
+  const [documentJobState, setDocumentJobState] = useState("Idle");
+
   const fileInputRef = useRef(null);
+  const replaceInputRef = useRef(null);
+  const [replaceTargetIndex, setReplaceTargetIndex] = useState(null);
   const videoRef = useRef(null);
   const streamRef = useRef(null);
   const pollTimerRef = useRef(null);
@@ -65,8 +73,10 @@ export const DocumentScannerPage = ({ onNavigate }) => {
 
       if (pct > 40 && pct <= 70) {
         setScanStep("Text Recognition (OCR Engine)");
+        setDocumentJobState("Processing OCR");
       } else if (pct > 70) {
         setScanStep("Medical Entity Extraction & Evidence Verification");
+        setDocumentJobState("AI extraction complete");
       }
 
       try {
@@ -88,6 +98,8 @@ export const DocumentScannerPage = ({ onNavigate }) => {
             setProgress(100);
             setScanStep("Extraction Complete!");
             setScanState("done");
+            setDocumentJobState("Ready for review");
+            setDocumentVersionState("Ready for review");
 
             // Fetch extracted facts if available
             let facts = [];
@@ -156,6 +168,8 @@ export const DocumentScannerPage = ({ onNavigate }) => {
         setProgress(100);
         setScanStep("Extraction Complete!");
         setScanState("done");
+        setDocumentJobState("Ready for review");
+        setDocumentVersionState("Ready for review");
       }
     }, 800);
   };
@@ -165,6 +179,8 @@ export const DocumentScannerPage = ({ onNavigate }) => {
     setScanState("scanning");
     setProgress(15);
     setScanStep("Image Enhancement & Uploading to Secure Ingestion Pipeline");
+    setDocumentJobState("Uploading");
+    setDocumentVersionState("Draft v1");
     setSelectedDocName(file.name);
     setPreviewImage(previewUrl);
     setErrorMessage("");
@@ -193,6 +209,7 @@ export const DocumentScannerPage = ({ onNavigate }) => {
           setUploadedHandle(existingHandle);
           setProgress(50);
           setScanStep("Document recognized! Loading extracted entities...");
+          setDocumentJobState("AI extraction complete");
           pollDocumentStatus(existingHandle, file.name, previewUrl);
           return;
         }
@@ -206,6 +223,7 @@ export const DocumentScannerPage = ({ onNavigate }) => {
 
       setProgress(35);
       setScanStep("Text Recognition (OCR Engine)");
+      setDocumentJobState("Processing OCR");
 
       // Poll until worker processing finishes
       pollDocumentStatus(handle, file.name, previewUrl);
@@ -213,26 +231,40 @@ export const DocumentScannerPage = ({ onNavigate }) => {
       console.warn("Document upload error:", err.message);
       setScanState("error");
       setErrorMessage(err.message || "Failed to upload document to clinical worker.");
+      setDocumentJobState("Failed");
+      setDocumentVersionState("Requires rescan");
     }
   };
 
   // Handle Real File Upload
   const handleFileChange = (e) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+    const files = Array.from(e.target.files || []);
+    if (!files.length) return;
 
-    if (file.size > 15 * 1024 * 1024) {
-      setErrorMessage("File exceeds 15MB limit. Please upload a smaller scan.");
-      setScanState("error");
-      return;
-    }
+    files.forEach((file, idx) => {
+      if (file.size > 15 * 1024 * 1024) {
+        setErrorMessage("File exceeds 15MB limit. Please upload a smaller scan.");
+        setScanState("error");
+        setDocumentJobState("Failed");
+        setDocumentVersionState("Requires rescan");
+        return;
+      }
 
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      const dataUrl = event.target.result;
-      uploadAndProcessFile(file, dataUrl);
-    };
-    reader.readAsDataURL(file);
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        const dataUrl = event.target.result;
+        const pageItem = {
+          id: `page_${Date.now()}_${idx}`,
+          file,
+          name: file.name,
+          previewUrl: dataUrl,
+          status: "processing"
+        };
+        setStagedPages((prev) => [...prev, pageItem]);
+        uploadAndProcessFile(file, dataUrl);
+      };
+      reader.readAsDataURL(file);
+    });
   };
 
   // Handle Drag and Drop
@@ -302,7 +334,7 @@ export const DocumentScannerPage = ({ onNavigate }) => {
     setIsCameraActive(false);
   };
 
-  // Delete staged draft scan
+  // Delete staged draft scan or all drafts
   const handleDeleteDraft = () => {
     if (pollTimerRef.current) {
       clearInterval(pollTimerRef.current);
@@ -315,18 +347,92 @@ export const DocumentScannerPage = ({ onNavigate }) => {
     setUploadedHandle(null);
     setActiveScannedDoc(null);
     setErrorMessage("");
+    setStagedPages([]);
+    setDocumentJobState("Idle");
+    setDocumentVersionState("Draft v1");
     if (fileInputRef.current) {
       fileInputRef.current.value = "";
     }
   };
 
+  const handleDeleteDraftPage = (index) => {
+    setStagedPages((prev) => {
+      const copy = prev.filter((_, i) => i !== index);
+      if (copy.length === 0) {
+        handleDeleteDraft();
+      }
+      return copy;
+    });
+  };
+
+  const handleMovePage = (index, direction) => {
+    setStagedPages((prev) => {
+      const targetIndex = index + direction;
+      if (targetIndex < 0 || targetIndex >= prev.length) return prev;
+      const copy = [...prev];
+      const temp = copy[index];
+      copy[index] = copy[targetIndex];
+      copy[targetIndex] = temp;
+      return copy;
+    });
+  };
+
+  const handleRetryPage = (index) => {
+    const item = stagedPages[index];
+    if (item && item.file) {
+      uploadAndProcessFile(item.file, item.previewUrl);
+    }
+  };
+
+  const handleTriggerReplace = (index) => {
+    setReplaceTargetIndex(index);
+    if (replaceInputRef.current) {
+      replaceInputRef.current.click();
+    }
+  };
+
+  const handleReplaceFile = (e) => {
+    const file = e.target.files?.[0];
+    if (!file || replaceTargetIndex === null) return;
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const dataUrl = event.target.result;
+      setStagedPages((prev) => {
+        const copy = [...prev];
+        copy[replaceTargetIndex] = {
+          ...copy[replaceTargetIndex],
+          file,
+          name: file.name,
+          previewUrl: dataUrl,
+          status: "processing"
+        };
+        return copy;
+      });
+      uploadAndProcessFile(file, dataUrl);
+      setReplaceTargetIndex(null);
+    };
+    reader.readAsDataURL(file);
+  };
+
   return (
     <div className="max-w-5xl mx-auto py-6 px-4 space-y-6">
-      {/* Hidden File Input */}
+      {/* Hidden File Input (supports multi-image) */}
       <input
         type="file"
+        data-testid="main-file-input"
         ref={fileInputRef}
         onChange={handleFileChange}
+        accept="image/*,.pdf"
+        multiple
+        className="hidden"
+      />
+
+      {/* Hidden Replace File Input */}
+      <input
+        type="file"
+        data-testid="replace-file-input"
+        ref={replaceInputRef}
+        onChange={handleReplaceFile}
         accept="image/*,.pdf"
         className="hidden"
       />
@@ -539,7 +645,15 @@ export const DocumentScannerPage = ({ onNavigate }) => {
                 <span className="bg-emerald-100 text-emerald-800 text-[10px] font-black uppercase px-2.5 py-0.5 rounded-full border border-emerald-300">
                   OCR Complete
                 </span>
-                <h3 className="font-black text-slate-900 text-lg mt-1">
+                <div className="flex flex-wrap items-center justify-center gap-2 mt-2">
+                  <span className="text-[10px] font-black uppercase px-2.5 py-0.5 rounded-full bg-blue-100 text-blue-800 border border-blue-200">
+                    Version: {documentVersionState}
+                  </span>
+                  <span className="text-[10px] font-black uppercase px-2.5 py-0.5 rounded-full bg-indigo-100 text-indigo-800 border border-indigo-200">
+                    Job: {documentJobState}
+                  </span>
+                </div>
+                <h3 className="font-black text-slate-900 text-lg mt-2">
                   Extracted from: {selectedDocName}
                 </h3>
                 <p className="text-xs text-slate-500">
@@ -571,8 +685,8 @@ export const DocumentScannerPage = ({ onNavigate }) => {
                 </div>
               )}
 
-              {/* Action Buttons: View, Proceed, Delete Draft */}
-              <div className="flex flex-col sm:flex-row gap-2.5 justify-center pt-2">
+              {/* Action Buttons: View, Proceed, Add Another, Delete Draft */}
+              <div className="flex flex-col sm:flex-row flex-wrap gap-2.5 justify-center pt-2">
                 <button
                   onClick={() => {
                     if (onNavigate) {
@@ -600,6 +714,13 @@ export const DocumentScannerPage = ({ onNavigate }) => {
                 </button>
 
                 <button
+                  onClick={() => fileInputRef.current?.click()}
+                  className="bg-blue-50 hover:bg-blue-100 text-blue-700 font-bold px-3 py-3 rounded-xl text-xs flex items-center justify-center gap-1 transition cursor-pointer border border-blue-200"
+                >
+                  <span>+ Add Another Page</span>
+                </button>
+
+                <button
                   onClick={handleDeleteDraft}
                   className="bg-red-50 hover:bg-red-100 text-red-700 font-bold px-3 py-3 rounded-xl text-xs flex items-center justify-center gap-1 transition cursor-pointer border border-red-200"
                   title="Delete Draft Scan"
@@ -612,6 +733,90 @@ export const DocumentScannerPage = ({ onNavigate }) => {
           )}
         </div>
       </div>
+
+      {/* STAGED MULTI-PAGE MANAGEMENT SECTION */}
+      {stagedPages.length > 0 && (
+        <div className="bg-white rounded-3xl border border-slate-200 shadow-sm p-6 space-y-4">
+          <div className="flex justify-between items-center">
+            <div>
+              <h3 className="text-sm font-black text-slate-900">
+                Staged Multi-Image Pages ({stagedPages.length})
+              </h3>
+              <p className="text-xs text-slate-500">
+                Manage, reorder, or replace draft scans before clinical review
+              </p>
+            </div>
+            <span className="text-[10px] font-black uppercase px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
+              Multi-Page Staging Active
+            </span>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
+            {stagedPages.map((pageItem, idx) => (
+              <div key={pageItem.id || idx} className="p-3.5 bg-slate-50 rounded-2xl border border-slate-200 space-y-2">
+                <div className="flex justify-between items-center">
+                  <span className="text-xs font-black text-slate-800">Page {idx + 1}</span>
+                  <span className="text-[10px] font-mono text-slate-500 truncate max-w-[130px]">{pageItem.name}</span>
+                </div>
+
+                {pageItem.previewUrl && (
+                  <div className="h-28 rounded-xl overflow-hidden bg-slate-200 flex items-center justify-center border border-slate-300/60">
+                    <img src={pageItem.previewUrl} alt={pageItem.name} className="h-full w-full object-contain" />
+                  </div>
+                )}
+
+                <div className="flex items-center justify-between gap-1 pt-1">
+                  <div className="flex gap-1">
+                    <button
+                      type="button"
+                      onClick={() => handleMovePage(idx, -1)}
+                      disabled={idx === 0}
+                      className="px-2 py-1 bg-white hover:bg-slate-100 rounded-lg border border-slate-200 text-slate-600 disabled:opacity-30 text-xs font-bold cursor-pointer"
+                      title="Move Page Up"
+                    >
+                      ↑
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleMovePage(idx, 1)}
+                      disabled={idx === stagedPages.length - 1}
+                      className="px-2 py-1 bg-white hover:bg-slate-100 rounded-lg border border-slate-200 text-slate-600 disabled:opacity-30 text-xs font-bold cursor-pointer"
+                      title="Move Page Down"
+                    >
+                      ↓
+                    </button>
+                  </div>
+
+                  <div className="flex gap-1">
+                    <button
+                      type="button"
+                      onClick={() => handleTriggerReplace(idx)}
+                      className="px-2 py-1 bg-white hover:bg-blue-50 text-blue-700 rounded-lg border border-slate-200 text-[10px] font-bold cursor-pointer"
+                    >
+                      Replace
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleRetryPage(idx)}
+                      className="px-2 py-1 bg-white hover:bg-amber-50 text-amber-700 rounded-lg border border-slate-200 text-[10px] font-bold cursor-pointer"
+                    >
+                      Retry
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleDeleteDraftPage(idx)}
+                      className="p-1.5 bg-white hover:bg-red-50 text-red-600 rounded-lg border border-slate-200 text-xs font-bold cursor-pointer"
+                      title="Delete Draft Page"
+                    >
+                      <Trash2 size={13} />
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* CAMERA POPUP MODAL */}
       {isCameraActive && (

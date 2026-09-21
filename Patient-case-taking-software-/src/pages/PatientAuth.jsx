@@ -22,7 +22,7 @@ import {
   AlertCircle
 } from "lucide-react";
 
-export const PatientAuth = () => {
+export const PatientAuth = ({ onNavigate }) => {
   const {
     setActiveTab,
     isDemoMode,
@@ -133,8 +133,13 @@ export const PatientAuth = () => {
         };
         setPatientData(updated);
 
-        if (isDemoMode) nextDemoStep();
-        else setActiveTab("interview");
+        if (onNavigate) {
+          onNavigate("/kiosk/consent");
+        } else if (isDemoMode) {
+          nextDemoStep();
+        } else {
+          setActiveTab("interview");
+        }
         return;
       } catch (err) {
         // Fallback to local state if server offline
@@ -190,8 +195,13 @@ export const PatientAuth = () => {
         };
         setPatientData(updated);
 
-        if (isDemoMode) nextDemoStep();
-        else setActiveTab("interview");
+        if (onNavigate) {
+          onNavigate("/kiosk/consent");
+        } else if (isDemoMode) {
+          nextDemoStep();
+        } else {
+          setActiveTab("interview");
+        }
         return;
       }
     } catch (err) {
@@ -212,8 +222,13 @@ export const PatientAuth = () => {
     };
 
     setPatientData(updated);
-    if (isDemoMode) nextDemoStep();
-    else setActiveTab("interview");
+    if (onNavigate) {
+      onNavigate("/kiosk/consent");
+    } else if (isDemoMode) {
+      nextDemoStep();
+    } else {
+      setActiveTab("interview");
+    }
   };
 
   const adjustAge = (delta) => {

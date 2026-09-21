@@ -58,6 +58,10 @@ export const DoctorHeader = ({ activeDoctorRoute = "queue", activeCaseHandle = n
     try {
       await fetch("/api/auth/logout", {
         method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Requested-With": "XMLHttpRequest"
+        },
         credentials: "include"
       });
     } catch (err) {

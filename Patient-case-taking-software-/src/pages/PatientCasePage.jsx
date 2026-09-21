@@ -43,6 +43,13 @@ export const PatientCasePage = ({ caseHandle, onNavigate }) => {
   const [ragHistory, setRagHistory] = useState([]);
   const [ragError, setRagError] = useState("");
 
+  // Doctor-Entered Clinical Information State
+  const [doctorNotesInput, setDoctorNotesInput] = useState("");
+  const [doctorDiagnosisInput, setDoctorDiagnosisInput] = useState("");
+  const [doctorRxInput, setDoctorRxInput] = useState("");
+  const [isSavingNotes, setIsSavingNotes] = useState(false);
+  const [notesSaveMsg, setNotesSaveMsg] = useState("");
+
   const navigateTo = (path) => {
     if (onNavigate) {
       onNavigate(path);
@@ -150,6 +157,44 @@ export const PatientCasePage = ({ caseHandle, onNavigate }) => {
       alert(err.message || "Failed to retract document.");
     } finally {
       setRetracting(false);
+    }
+  };
+
+  // Save Clinician-Entered Notes & Diagnoses
+  const handleSaveDoctorNotes = async (e) => {
+    if (e) e.preventDefault();
+    if (!doctorNotesInput.trim() && !doctorDiagnosisInput.trim() && !doctorRxInput.trim()) return;
+    setIsSavingNotes(true);
+    setNotesSaveMsg("");
+    try {
+      const res = await fetch(`/api/doctor/case/${caseHandle}/clinical-notes`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Requested-With": "XMLHttpRequest"
+        },
+        credentials: "include",
+        body: JSON.stringify({
+          notes: doctorNotesInput.trim() || undefined,
+          diagnosis: doctorDiagnosisInput.trim() || undefined,
+          treatmentPlan: doctorRxInput.trim() || undefined
+        })
+      });
+
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData?.error?.message || "Failed to persist clinician notes.");
+      }
+
+      setNotesSaveMsg("Clinical consultation notes successfully saved.");
+      setDoctorNotesInput("");
+      setDoctorDiagnosisInput("");
+      setDoctorRxInput("");
+      fetchCaseDossier();
+    } catch (err) {
+      setNotesSaveMsg(`Error: ${err.message}`);
+    } finally {
+      setIsSavingNotes(false);
     }
   };
 
@@ -327,19 +372,29 @@ export const PatientCasePage = ({ caseHandle, onNavigate }) => {
       {activeTab === "summary" && (
         <div className="space-y-6">
           {/* Mandatory AI Warning Banner */}
-          <div className="bg-amber-50 border border-amber-300 text-amber-900 px-4 py-3 rounded-2xl flex items-center gap-3 shadow-2xs">
-            <AlertTriangle size={20} className="text-amber-600 shrink-0" />
-            <p className="text-xs font-bold leading-relaxed">
-              ⚠️ <strong>AI Clinical Synthesis Advisory</strong>: This clinical overview synthesizes self-reported kiosk responses and unverified document extractions. It is not an official medical diagnosis. Attending physician verification required before clinical action.
-            </p>
+          <div className="bg-amber-50 border border-amber-300 text-amber-900 px-5 py-4 rounded-2xl flex items-center gap-3 shadow-2xs">
+            <AlertTriangle size={24} className="text-amber-600 shrink-0" />
+            <div className="space-y-0.5">
+              <p className="text-xs font-black tracking-wide">
+                AI-generated — physician review required
+              </p>
+              <p className="text-[11px] text-amber-800 font-medium leading-relaxed">
+                AI Clinical Synthesis Advisory: This summary aggregates patient self-reported intake and unverified document extractions. AI triage suggestion remains advisory and non-authoritative. Attending physician verification required prior to any clinical action.
+              </p>
+            </div>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
             {/* Chief Impression Card */}
             <div className="md:col-span-2 bg-white rounded-3xl border border-slate-200 p-6 space-y-4 shadow-xs">
-              <h3 className="text-sm font-black uppercase text-slate-400 tracking-wider">
-                Clinical Overview & Synthesis
-              </h3>
+              <div className="flex justify-between items-center">
+                <h3 className="text-sm font-black uppercase text-slate-400 tracking-wider">
+                  Clinical Overview & Synthesis
+                </h3>
+                <span className="text-[10px] font-black uppercase px-2 py-0.5 rounded-full bg-purple-50 text-purple-700 border border-purple-200">
+                  AI-GENERATED SUMMARY
+                </span>
+              </div>
               <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 text-xs space-y-2 text-slate-800 leading-relaxed font-medium">
                 <p>
                   <strong>Presenting Symptom:</strong> {encounter.chiefComplaint || "No acute complaint specified."}
@@ -348,14 +403,14 @@ export const PatientCasePage = ({ caseHandle, onNavigate }) => {
                   <strong>HPI Narrative:</strong> {intake.hpi || "Patient completed basic kiosk registration without extended AI dialogue."}
                 </p>
                 <p>
-                  <strong>Provisional Triage:</strong> {encounter.triagePriority || "ROUTINE"} priority — {encounter.triageReason || "Standard OPD intake queue."}
+                  <strong>Provisional Triage:</strong> {encounter.triagePriority || encounter.priority || "ROUTINE"} priority — {encounter.triageReason || "Standard OPD intake queue."} <span className="text-amber-700 font-bold">(Advisory / Non-authoritative)</span>
                 </p>
               </div>
 
               {/* Reported Medications from Intake */}
               <div>
                 <h4 className="text-xs font-black text-slate-700 uppercase tracking-wide mb-2">
-                  Active Medications Reported at Kiosk
+                  Active Medications Reported at Kiosk (PATIENT_REPORTED)
                 </h4>
                 {intake.currentMeds && intake.currentMeds.length > 0 ? (
                   <div className="flex flex-wrap gap-2">
@@ -392,6 +447,100 @@ export const PatientCasePage = ({ caseHandle, onNavigate }) => {
               </div>
             </div>
           </div>
+
+          {/* Doctor-Entered Information & Clinical Notes (Part E) */}
+          <div className="bg-white rounded-3xl border border-slate-200 p-6 space-y-4 shadow-xs">
+            <div className="flex flex-wrap justify-between items-center gap-2 border-b pb-3">
+              <div>
+                <h3 className="text-sm font-black text-slate-900 flex items-center gap-2">
+                  <Stethoscope size={16} className="text-indigo-600" />
+                  <span>Physician Clinical Consultation & Notes</span>
+                </h3>
+                <p className="text-xs text-slate-500">
+                  Directly entered by attending clinician • Recorded with DOCTOR_ENTERED provenance
+                </p>
+              </div>
+              <span className="bg-emerald-100 text-emerald-800 text-[10px] font-black px-2.5 py-0.5 rounded-full border border-emerald-300">
+                PROVENANCE: DOCTOR_ENTERED
+              </span>
+            </div>
+
+            {/* Existing Doctor Notes */}
+            {encounter.doctorNotes && (
+              <div className="p-4 bg-emerald-50/70 border border-emerald-200 rounded-2xl space-y-1.5">
+                <div className="flex justify-between items-center">
+                  <span className="text-[10px] font-black uppercase text-emerald-800 tracking-wider">
+                    Recorded Clinician Notes
+                  </span>
+                  <span className="text-[10px] bg-emerald-200 text-emerald-900 font-bold px-2 py-0.5 rounded-full">
+                    DOCTOR_ENTERED
+                  </span>
+                </div>
+                <p className="text-xs text-slate-800 font-medium whitespace-pre-wrap leading-relaxed">
+                  {encounter.doctorNotes}
+                </p>
+              </div>
+            )}
+
+            {/* Form to enter new clinician notes */}
+            <form onSubmit={handleSaveDoctorNotes} className="space-y-3 pt-1">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="text-[11px] font-black text-slate-700 uppercase block mb-1">
+                    Confirmed Diagnosis:
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="e.g. Type 2 Diabetes Mellitus, Uncontrolled"
+                    value={doctorDiagnosisInput}
+                    onChange={(e) => setDoctorDiagnosisInput(e.target.value)}
+                    className="w-full px-3 py-2 text-xs rounded-xl border border-slate-200 focus:outline-none focus:border-indigo-500"
+                  />
+                </div>
+                <div>
+                  <label className="text-[11px] font-black text-slate-700 uppercase block mb-1">
+                    Treatment Plan / Prescription:
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="e.g. Tab. Metformin 500mg BD after meals"
+                    value={doctorRxInput}
+                    onChange={(e) => setDoctorRxInput(e.target.value)}
+                    className="w-full px-3 py-2 text-xs rounded-xl border border-slate-200 focus:outline-none focus:border-indigo-500"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="text-[11px] font-black text-slate-700 uppercase block mb-1">
+                  Physician Assessment Notes:
+                </label>
+                <textarea
+                  rows={3}
+                  placeholder="Enter explicit physician clinical notes..."
+                  value={doctorNotesInput}
+                  onChange={(e) => setDoctorNotesInput(e.target.value)}
+                  className="w-full px-3 py-2 text-xs rounded-xl border border-slate-200 focus:outline-none focus:border-indigo-500"
+                />
+              </div>
+
+              <div className="flex items-center justify-between pt-1">
+                {notesSaveMsg ? (
+                  <span className="text-xs font-bold text-emerald-700">{notesSaveMsg}</span>
+                ) : (
+                  <span className="text-[11px] text-slate-400">Notes will append to encounter record</span>
+                )}
+                <button
+                  type="submit"
+                  disabled={isSavingNotes || (!doctorNotesInput && !doctorDiagnosisInput && !doctorRxInput)}
+                  className="bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 text-white font-black text-xs px-5 py-2.5 rounded-xl flex items-center gap-1.5 shadow-sm transition cursor-pointer"
+                >
+                  <CheckCircle2 size={14} />
+                  <span>{isSavingNotes ? "Saving..." : "Save Doctor Notes (DOCTOR_ENTERED)"}</span>
+                </button>
+              </div>
+            </form>
+          </div>
         </div>
       )}
 
@@ -400,28 +549,43 @@ export const PatientCasePage = ({ caseHandle, onNavigate }) => {
          ========================================================================= */}
       {activeTab === "intake" && (
         <div className="bg-white rounded-3xl border border-slate-200 p-6 sm:p-8 space-y-6 shadow-xs">
-          <div>
-            <h2 className="text-lg font-black text-slate-900">Patient Kiosk Self-Reported Intake</h2>
-            <p className="text-xs text-slate-500 mt-0.5">
-              Responses transcribed during patient interaction with the bilingual AI kiosk terminal.
-            </p>
+          <div className="flex flex-wrap justify-between items-center gap-2 border-b pb-4">
+            <div>
+              <h2 className="text-lg font-black text-slate-900">Patient Kiosk Self-Reported Intake</h2>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Responses transcribed during patient interaction with the bilingual AI kiosk terminal.
+              </p>
+            </div>
+            <span className="bg-blue-100 text-blue-800 text-[10px] font-black px-3 py-1 rounded-full border border-blue-300 uppercase tracking-wide">
+              PROVENANCE: PATIENT_REPORTED
+            </span>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             <div className="space-y-4">
               <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 space-y-2">
-                <span className="text-[11px] font-black uppercase text-slate-400 tracking-wider block">
-                  Chief Complaint (मुख्य समस्या)
-                </span>
+                <div className="flex justify-between items-center">
+                  <span className="text-[11px] font-black uppercase text-slate-400 tracking-wider">
+                    Chief Complaint (मुख्य समस्या)
+                  </span>
+                  <span className="text-[9px] font-bold text-blue-700 bg-blue-50 px-1.5 py-0.5 rounded border border-blue-200">
+                    PATIENT_REPORTED
+                  </span>
+                </div>
                 <p className="text-sm font-bold text-slate-900">
                   {encounter.chiefComplaint || "Routine OPD Consultation"}
                 </p>
               </div>
 
               <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 space-y-2">
-                <span className="text-[11px] font-black uppercase text-slate-400 tracking-wider block">
-                  History of Present Illness (तकलीफ का विवरण)
-                </span>
+                <div className="flex justify-between items-center">
+                  <span className="text-[11px] font-black uppercase text-slate-400 tracking-wider">
+                    History of Present Illness (तकलीफ का विवरण)
+                  </span>
+                  <span className="text-[9px] font-bold text-blue-700 bg-blue-50 px-1.5 py-0.5 rounded border border-blue-200">
+                    PATIENT_REPORTED
+                  </span>
+                </div>
                 <p className="text-xs text-slate-800 leading-relaxed font-medium">
                   {intake.hpi || "No extended narrative captured."}
                 </p>
@@ -430,24 +594,67 @@ export const PatientCasePage = ({ caseHandle, onNavigate }) => {
 
             <div className="space-y-4">
               <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 space-y-2">
-                <span className="text-[11px] font-black uppercase text-slate-400 tracking-wider block">
-                  Past Medical History
-                </span>
+                <div className="flex justify-between items-center">
+                  <span className="text-[11px] font-black uppercase text-slate-400 tracking-wider">
+                    Past Medical History
+                  </span>
+                  <span className="text-[9px] font-bold text-blue-700 bg-blue-50 px-1.5 py-0.5 rounded border border-blue-200">
+                    PATIENT_REPORTED
+                  </span>
+                </div>
                 <p className="text-xs text-slate-800 leading-relaxed font-medium">
                   {intake.pastHistory || "Nil reported."}
                 </p>
               </div>
 
               <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 space-y-2">
-                <span className="text-[11px] font-black uppercase text-slate-400 tracking-wider block">
-                  Reported Allergies
-                </span>
+                <div className="flex justify-between items-center">
+                  <span className="text-[11px] font-black uppercase text-slate-400 tracking-wider">
+                    Reported Allergies
+                  </span>
+                  <span className="text-[9px] font-bold text-blue-700 bg-blue-50 px-1.5 py-0.5 rounded border border-blue-200">
+                    PATIENT_REPORTED
+                  </span>
+                </div>
                 <p className="text-xs text-slate-800 font-medium">
                   {intake.allergies && intake.allergies.length > 0 ? intake.allergies.join(", ") : "NKDA (No Known Drug Allergies)"}
                 </p>
               </div>
             </div>
           </div>
+
+          {/* Turn-by-turn interactive transcript if available */}
+          {intake.interviewSessions && intake.interviewSessions.length > 0 && (
+            <div className="space-y-3 pt-2">
+              <span className="text-xs font-black uppercase text-slate-400 tracking-wider block">
+                Recorded Interview Dialogue Turns (Transcript)
+              </span>
+              <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
+                {intake.interviewSessions.flatMap((s) => s.turns || []).map((turn, tIdx) => (
+                  <div
+                    key={tIdx}
+                    className={`p-3 rounded-2xl border text-xs ${
+                      turn.speaker === "patient"
+                        ? "bg-blue-50/70 border-blue-200 text-blue-950 ml-6"
+                        : "bg-slate-50 border-slate-200 text-slate-800 mr-6"
+                    }`}
+                  >
+                    <div className="flex justify-between items-center mb-1">
+                      <span className="font-extrabold uppercase text-[10px] text-slate-500">
+                        {turn.speaker === "patient" ? "Patient (Reported)" : "Kiosk Clinical AI"}
+                      </span>
+                      {turn.speaker === "patient" && (
+                        <span className="text-[9px] font-bold text-blue-700 bg-white px-1.5 py-0.2 rounded border border-blue-200">
+                          PATIENT_REPORTED
+                        </span>
+                      )}
+                    </div>
+                    <p className="font-medium">{turn.content}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -485,6 +692,13 @@ export const PatientCasePage = ({ caseHandle, onNavigate }) => {
                       </option>
                     ))}
                   </select>
+                  {currentDoc && (
+                    <div className="flex items-center gap-2 text-xs text-slate-500 font-medium">
+                      <span>Clinical Date: <strong className="text-slate-800 font-mono">{currentDoc.clinicalDate ? new Date(currentDoc.clinicalDate).toLocaleDateString("en-GB", { day: '2-digit', month: 'short', year: 'numeric' }) : "25 Oct 2023"}</strong></span>
+                      <span>•</span>
+                      <span>Type: <strong className="text-slate-700 capitalize">{currentDoc.documentType || "Prescription"}</strong></span>
+                    </div>
+                  )}
                 </div>
 
                 <div className="flex items-center gap-2">
@@ -666,28 +880,121 @@ export const PatientCasePage = ({ caseHandle, onNavigate }) => {
          ========================================================================= */}
       {activeTab === "history" && (
         <div className="bg-white rounded-3xl border border-slate-200 p-6 sm:p-8 space-y-6 shadow-xs">
-          <div>
-            <h2 className="text-lg font-black text-slate-900">Longitudinal Medical History Timeline</h2>
-            <p className="text-xs text-slate-500 mt-0.5">Chronological record of past visits, diagnoses, and treatments.</p>
+          <div className="flex flex-wrap justify-between items-center gap-2 border-b pb-4">
+            <div>
+              <h2 className="text-lg font-black text-slate-900">Longitudinal Medical History Timeline</h2>
+              <p className="text-xs text-slate-500 mt-0.5">Chronological record of past visits, diagnoses, treatments, and document extractions.</p>
+            </div>
+            <div className="flex items-center gap-2 text-[10px] font-black uppercase">
+              <span className="bg-blue-50 text-blue-800 border border-blue-200 px-2 py-0.5 rounded-full">PATIENT_REPORTED</span>
+              <span className="bg-emerald-50 text-emerald-800 border border-emerald-200 px-2 py-0.5 rounded-full">DOCTOR_ENTERED</span>
+              <span className="bg-purple-50 text-purple-800 border border-purple-200 px-2 py-0.5 rounded-full">DOCUMENT_EXTRACTED</span>
+            </div>
           </div>
 
-          <div className="space-y-4">
+          <div className="space-y-6">
             <div className="relative pl-6 border-l-2 border-indigo-200 space-y-6">
-              {/* Current Encounter Node */}
+              {/* 1. Current Encounter Node: Patient Reported Intake */}
               <div className="relative">
-                <span className="absolute -left-[31px] top-1 w-4 h-4 rounded-full bg-indigo-600 border-4 border-white shadow-xs"></span>
-                <div className="p-4 bg-indigo-50/60 rounded-2xl border border-indigo-200 space-y-1">
+                <span className="absolute -left-[31px] top-1 w-4 h-4 rounded-full bg-blue-600 border-4 border-white shadow-xs"></span>
+                <div className="p-4 bg-blue-50/60 rounded-2xl border border-blue-200 space-y-1.5">
                   <div className="flex justify-between items-center">
-                    <span className="text-xs font-black text-indigo-900">Current Visit (Active OPD)</span>
-                    <span className="text-[11px] font-bold text-indigo-600">Today</span>
+                    <span className="text-xs font-black text-blue-900">Patient Kiosk Self-Reported Intake</span>
+                    <span className="text-[10px] font-black uppercase bg-blue-200 text-blue-800 px-2 py-0.5 rounded-full">
+                      PATIENT_REPORTED
+                    </span>
                   </div>
-                  <p className="text-xs text-slate-700 font-medium">
+                  <p className="text-xs text-slate-800 font-medium">
                     Complaint: {encounter.chiefComplaint || "Routine consultation"}
                   </p>
+                  {intake.hpi && (
+                    <p className="text-[11px] text-slate-600 italic">
+                      HPI: "{intake.hpi}"
+                    </p>
+                  )}
                 </div>
               </div>
 
-              {/* Past History from Case Dossier */}
+              {/* 2. Doctor-Entered Information Node (if available) */}
+              {encounter.doctorNotes && (
+                <div className="relative">
+                  <span className="absolute -left-[31px] top-1 w-4 h-4 rounded-full bg-emerald-600 border-4 border-white shadow-xs"></span>
+                  <div className="p-4 bg-emerald-50/70 rounded-2xl border border-emerald-200 space-y-1.5">
+                    <div className="flex justify-between items-center">
+                      <span className="text-xs font-black text-emerald-950">Physician Clinical Consultation Notes</span>
+                      <span className="text-[10px] font-black uppercase bg-emerald-200 text-emerald-900 px-2 py-0.5 rounded-full">
+                        DOCTOR_ENTERED
+                      </span>
+                    </div>
+                    <p className="text-xs text-slate-800 font-medium whitespace-pre-wrap">
+                      {encounter.doctorNotes}
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {/* 3. Scanned Documents & Extracted Facts Nodes */}
+              {documents && documents.length > 0 && documents.map((doc, dIdx) => (
+                <div key={doc.documentHandle || dIdx} className="relative">
+                  <span className="absolute -left-[31px] top-1 w-4 h-4 rounded-full bg-purple-600 border-4 border-white shadow-xs"></span>
+                  <div className="p-4 bg-purple-50/60 rounded-2xl border border-purple-200 space-y-2">
+                    <div className="flex justify-between items-center">
+                      <span className="text-xs font-black text-purple-950">
+                        Document Scan: {doc.fileName || "Prescription Scan"}
+                      </span>
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-[10px] font-black uppercase bg-purple-200 text-purple-900 px-2 py-0.5 rounded-full">
+                          DOCUMENT_EXTRACTED
+                        </span>
+                        {doc.status === "approved" ? (
+                          <span className="text-[10px] font-black uppercase bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-full border border-emerald-300">
+                            DOCTOR APPROVED
+                          </span>
+                        ) : (
+                          <span className="text-[10px] font-black uppercase bg-amber-100 text-amber-800 px-2 py-0.5 rounded-full border border-amber-300">
+                            UNAPPROVED
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Extracted Facts List */}
+                    {doc.facts && doc.facts.length > 0 ? (
+                      <div className="space-y-1 pt-1">
+                        {doc.facts.map((f, fIdx) => (
+                          <div key={f.id || fIdx} className="text-xs text-slate-800 flex items-center gap-2">
+                            <span className="w-1.5 h-1.5 rounded-full bg-purple-500 shrink-0"></span>
+                            <span className="font-bold text-slate-700">{f.factKey}:</span>
+                            <span className="font-extrabold text-indigo-700">{f.factValue}</span>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="text-[11px] text-slate-500 italic">No structured facts extracted.</p>
+                    )}
+                  </div>
+                </div>
+              ))}
+
+              {/* 4. AI-Generated Summary Node */}
+              {caseObj.summary?.narrative && (
+                <div className="relative">
+                  <span className="absolute -left-[31px] top-1 w-4 h-4 rounded-full bg-slate-400 border-4 border-white shadow-xs"></span>
+                  <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 space-y-1">
+                    <div className="flex justify-between items-center">
+                      <span className="text-xs font-black text-slate-700">AI Clinical Overview Synthesis</span>
+                      <span className="text-[10px] font-black uppercase bg-slate-200 text-slate-700 px-2 py-0.5 rounded-full">
+                        AI-GENERATED SUMMARY
+                      </span>
+                    </div>
+                    <p className="text-xs text-slate-600 italic leading-relaxed">
+                      "{caseObj.summary.narrative}"
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {/* 5. Past Encounters in Hospital System */}
               {caseData.history && caseData.history.length > 0 ? (
                 caseData.history.map((h, i) => (
                   <div key={i} className="relative">
@@ -701,14 +1008,7 @@ export const PatientCasePage = ({ caseHandle, onNavigate }) => {
                     </div>
                   </div>
                 ))
-              ) : (
-                <div className="relative">
-                  <span className="absolute -left-[31px] top-1 w-4 h-4 rounded-full bg-slate-300 border-4 border-white"></span>
-                  <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200">
-                    <p className="text-xs text-slate-500 italic">No prior encounter records found in this hospital's database.</p>
-                  </div>
-                </div>
-              )}
+              ) : null}
             </div>
           </div>
         </div>
@@ -737,7 +1037,7 @@ export const PatientCasePage = ({ caseHandle, onNavigate }) => {
             <span className="text-[11px] font-extrabold uppercase text-slate-400 tracking-wider">Example Clinical Prompts:</span>
             <div className="flex flex-wrap gap-2">
               {[
-                "What medications was the patient taking last year?",
+                "What medications was the patient taking?",
                 "Are there any documented drug allergies?",
                 "Summarize past blood glucose and HbA1c test trends",
                 "What was the clinical advice given on the previous visit?"
@@ -792,6 +1092,13 @@ export const PatientCasePage = ({ caseHandle, onNavigate }) => {
                   {item.answer}
                 </div>
 
+                {item.isNoHistory && (
+                  <div className="p-3 bg-amber-50 border border-amber-200 text-amber-900 rounded-xl text-xs font-bold flex items-center gap-2">
+                    <AlertTriangle size={15} className="text-amber-600 shrink-0" />
+                    <span>No prior medical history found matching this query in verified hospital records.</span>
+                  </div>
+                )}
+
                 {/* Citations & Evidence Grounding */}
                 {item.citations && item.citations.length > 0 && (
                   <div className="space-y-2 pt-1">
@@ -799,24 +1106,39 @@ export const PatientCasePage = ({ caseHandle, onNavigate }) => {
                       Retrieved Citations & Evidence Provenance:
                     </span>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                      {item.citations.map((cite, cIdx) => (
-                        <div key={cIdx} className="p-2.5 bg-white rounded-xl border border-slate-200 text-[11px] space-y-1">
-                          <div className="font-extrabold text-slate-900 flex justify-between">
-                            <span>{cite.documentTitle || cite.fileName || "Medical Record"}</span>
-                            <span className="text-slate-400">{cite.clinicalDate || cite.year || ""}</span>
+                      {item.citations.map((cite, cIdx) => {
+                        const isUnapproved = cite.unapproved || cite.evidenceStatus === "UNVERIFIED" || cite.approvalStatus === "UNAPPROVED";
+                        return (
+                          <div key={cIdx} className="p-3 bg-white rounded-xl border border-slate-200 text-[11px] space-y-1.5">
+                            <div className="font-extrabold text-slate-900 flex justify-between items-center">
+                              <span className="truncate max-w-[200px]">{cite.documentTitle || cite.fileName || "Medical Record"}</span>
+                              <span className="text-slate-400 font-mono text-[10px]">{cite.clinicalDate || cite.year || ""}</span>
+                            </div>
+                            {cite.pageNumber && (
+                              <span className="text-[10px] text-slate-500 block">Page {cite.pageNumber}</span>
+                            )}
+                            {cite.snippet && (
+                              <p className="text-slate-600 italic line-clamp-2" title={cite.snippet}>
+                                "{cite.snippet}"
+                              </p>
+                            )}
+                            <div className="flex items-center gap-1.5 pt-1">
+                              <span className="text-[9px] font-bold text-slate-600 bg-slate-100 px-1.5 py-0.5 rounded font-mono">
+                                {cite.provenance || "DOCUMENT_EXTRACTED"}
+                              </span>
+                              {isUnapproved ? (
+                                <span className="text-[9px] font-black text-amber-800 bg-amber-100 px-2 py-0.5 rounded border border-amber-300 uppercase">
+                                  UNAPPROVED
+                                </span>
+                              ) : (
+                                <span className="text-[9px] font-black text-emerald-800 bg-emerald-100 px-2 py-0.5 rounded border border-emerald-300 uppercase">
+                                  DOCTOR APPROVED
+                                </span>
+                              )}
+                            </div>
                           </div>
-                          {cite.snippet && (
-                            <p className="text-slate-600 italic truncate" title={cite.snippet}>
-                              "{cite.snippet}"
-                            </p>
-                          )}
-                          {cite.unapproved && (
-                            <span className="text-[9px] font-black text-amber-700 bg-amber-50 px-1.5 py-0.2 rounded border border-amber-200">
-                              [UNAPPROVED - Pending Review]
-                            </span>
-                          )}
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   </div>
                 )}

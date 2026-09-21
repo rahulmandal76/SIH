@@ -267,13 +267,13 @@ export const OCRResultsPage = () => {
               <div className="border-b-2 border-slate-800 pb-3 flex justify-between items-start">
                 <div>
                   <h4 className="font-black text-slate-900 text-base uppercase tracking-tight">
-                    {doc.hospital || "Government District Civil Hospital, Bhopal"}
+                    {doc.hospital || "Clinical Facility OPD"}
                   </h4>
                   <p className="text-[11px] text-slate-600 font-medium">
-                    Department of General Medicine & OPD Services • ABDM Reg. #48291
+                    Department of General Medicine & OPD Services
                   </p>
                   <p className="text-[10px] text-slate-500">
-                    Consulting Physician: <strong className="text-slate-800">{doc.doctor || "Dr. K. S. Verma (MD, General Medicine)"}</strong>
+                    Consulting Physician: <strong className="text-slate-800">{doc.doctor || "Consulting Physician"}</strong>
                   </p>
                 </div>
                 <div className="text-right bg-slate-100 p-2 rounded-xl border border-slate-200">
@@ -286,59 +286,55 @@ export const OCRResultsPage = () => {
               <div className="grid grid-cols-3 gap-2 bg-slate-50 p-2.5 rounded-xl border border-slate-200 text-[11px]">
                 <div>
                   <span className="text-slate-400 block text-[9px] uppercase font-bold">Patient Name</span>
-                  <strong className="text-slate-800">{patientData?.name || "Ramesh Sharma"}</strong>
+                  <strong className="text-slate-800">{patientData?.name || "Patient"}</strong>
                 </div>
                 <div>
                   <span className="text-slate-400 block text-[9px] uppercase font-bold">Age / Gender</span>
-                  <strong className="text-slate-800">{patientData?.age || 48}Y / {patientData?.gender || "Male"}</strong>
+                  <strong className="text-slate-800">{patientData?.age || 42}Y / {patientData?.gender || "Male"}</strong>
                 </div>
                 <div>
                   <span className="text-slate-400 block text-[9px] uppercase font-bold">Document Date</span>
-                  <strong className="text-slate-800">{doc.date || "12 Aug 2026"}</strong>
+                  <strong className="text-slate-800">{doc.date || "Not Specified"}</strong>
                 </div>
               </div>
 
               {/* Reported Patient Problems & Symptoms Section */}
-              <div className="space-y-2 bg-white p-4 rounded-xl border border-slate-200 shadow-2xs">
-                <div className="flex items-center gap-1.5 text-blue-900 font-black text-xs uppercase tracking-wider">
-                  <Activity size={14} className="text-red-500" />
-                  <span>Reported Health Problems & Symptoms (मुख्य समस्याएं)</span>
+              {doc.extractedData?.problems && doc.extractedData.problems.length > 0 && (
+                <div className="space-y-2 bg-white p-4 rounded-xl border border-slate-200 shadow-2xs">
+                  <div className="flex items-center gap-1.5 text-blue-900 font-black text-xs uppercase tracking-wider">
+                    <Activity size={14} className="text-red-500" />
+                    <span>Reported Health Problems & Symptoms (मुख्य समस्याएं)</span>
+                  </div>
+                  <div className="space-y-1.5 pt-1">
+                    {doc.extractedData.problems.map((prob, i) => (
+                      <div key={i} className="flex items-center gap-2 text-[11px] border-b border-slate-100 pb-1.5 text-slate-800">
+                        <span className="w-1.5 h-1.5 rounded-full bg-blue-600 shrink-0"></span>
+                        <span className="font-semibold">{prob}</span>
+                      </div>
+                    ))}
+                  </div>
                 </div>
-                <div className="space-y-1.5 pt-1">
-                  {(doc.extractedData?.problems || [
-                    "सीने में भारीपन व बेचैनी (Chest discomfort on brisk exertion)",
-                    "अनियंत्रित उच्च रक्तचाप (High Blood Pressure readings: 148/92 mmHg)",
-                    "चलने पर हल्का सांस फूलना (Exertional breathlessness)"
-                  ]).map((prob, i) => (
-                    <div key={i} className="flex items-center gap-2 text-[11px] border-b border-slate-100 pb-1.5 text-slate-800">
-                      <span className="w-1.5 h-1.5 rounded-full bg-blue-600 shrink-0"></span>
-                      <span className="font-semibold">{prob}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
+              )}
 
               {/* Related Clinical Queries & Evaluation Factors */}
-              <div className="space-y-2 bg-blue-50/50 p-3.5 rounded-xl border border-blue-200 text-xs">
-                <div className="flex items-center gap-1.5 text-blue-900 font-black text-[10px] uppercase tracking-wider">
-                  <HelpCircle size={13} className="text-blue-600" />
-                  <span>Problem-Related Queries & History (समस्या से जुड़े सवाल)</span>
+              {doc.extractedData?.relatedQueries && doc.extractedData.relatedQueries.length > 0 && (
+                <div className="space-y-2 bg-blue-50/50 p-3.5 rounded-xl border border-blue-200 text-xs">
+                  <div className="flex items-center gap-1.5 text-blue-900 font-black text-[10px] uppercase tracking-wider">
+                    <HelpCircle size={13} className="text-blue-600" />
+                    <span>Problem-Related Queries & History (समस्या से जुड़े सवाल)</span>
+                  </div>
+                  <div className="space-y-1.5 text-[11px]">
+                    {doc.extractedData.relatedQueries.map((q, i) => (
+                      <div key={i} className="bg-white/80 p-2 rounded-lg border border-blue-100/60">
+                        <span className="text-blue-800 font-bold block">{typeof q === 'string' ? q : q.query}</span>
+                        {typeof q !== 'string' && q.detail && (
+                          <span className="text-slate-600 text-[10px] block mt-0.5">{q.detail}</span>
+                        )}
+                      </div>
+                    ))}
+                  </div>
                 </div>
-                <div className="space-y-1.5 text-[11px]">
-                  {(doc.extractedData?.relatedQueries || [
-                    { query: "तकलीफ कब से है? (Duration)", detail: "पिछले 10-15 दिनों से लगातार महसूस हो रही है" },
-                    { query: "समस्या कब बढ़ती है? (Triggers)", detail: "सीढ़ियाँ चढ़ने या भारी काम करने पर सीने पर दबाव बढ़ता है" },
-                    { query: "क्या आराम करने से राहत मिलती है?", detail: "बैठ जाने या 5 मिनट रुकने पर दर्द कम हो जाता है" }
-                  ]).map((q, i) => (
-                    <div key={i} className="bg-white/80 p-2 rounded-lg border border-blue-100/60">
-                      <span className="text-blue-800 font-bold block">{typeof q === 'string' ? q : q.query}</span>
-                      {typeof q !== 'string' && q.detail && (
-                        <span className="text-slate-600 text-[10px] block mt-0.5">{q.detail}</span>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              </div>
+              )}
 
               {/* Diagnostic Tests / Lab Findings */}
               {doc.extractedData?.investigations?.length > 0 && (
@@ -389,7 +385,7 @@ export const OCRResultsPage = () => {
                   Document Date
                 </span>
                 <span className="text-slate-900 font-extrabold text-sm">
-                  {doc.date || "12 Aug 2026"}
+                  {doc.date || "Not Specified"}
                 </span>
               </div>
               <div className="bg-slate-50 p-3.5 rounded-2xl border border-slate-200">
@@ -397,7 +393,7 @@ export const OCRResultsPage = () => {
                   Doctor / Facility
                 </span>
                 <span className="text-slate-900 font-bold text-xs truncate block">
-                  {doc.hospital || "Civil Hospital OPD"}
+                  {doc.doctor || doc.hospital || "Clinical Facility OPD"}
                 </span>
               </div>
             </div>
@@ -408,56 +404,52 @@ export const OCRResultsPage = () => {
                 Clinical Findings / Diagnosis
               </span>
               <span className="text-slate-900 font-extrabold text-base block mt-0.5">
-                {doc.extractedData?.diagnosis || "OPD Clinical Consultation"}
+                {doc.extractedData?.diagnosis || "OPD Clinical Record"}
               </span>
             </div>
 
             {/* Patient Problem & Symptoms Assessment */}
-            <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 space-y-2.5">
-              <div className="flex justify-between items-center">
-                <span className="font-extrabold text-slate-700 uppercase tracking-wider text-[10px] flex items-center gap-1.5">
-                  <Activity size={13} className="text-red-500" />
-                  Patient's Health Problems & Symptoms (स्वास्थ्य समस्या)
-                </span>
-                <span className="text-[10px] bg-red-100 text-red-700 font-black px-2.5 py-0.5 rounded-full">
-                  Under Evaluation
-                </span>
+            {doc.extractedData?.problems && doc.extractedData.problems.length > 0 && (
+              <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 space-y-2.5">
+                <div className="flex justify-between items-center">
+                  <span className="font-extrabold text-slate-700 uppercase tracking-wider text-[10px] flex items-center gap-1.5">
+                    <Activity size={13} className="text-red-500" />
+                    Patient's Health Problems & Symptoms (स्वास्थ्य समस्या)
+                  </span>
+                  <span className="text-[10px] bg-red-100 text-red-700 font-black px-2.5 py-0.5 rounded-full">
+                    Under Evaluation
+                  </span>
+                </div>
+                <div className="space-y-2">
+                  {doc.extractedData.problems.map((prob, i) => (
+                    <div key={i} className="bg-white p-3 rounded-xl border border-slate-200 flex items-center gap-2.5 shadow-2xs">
+                      <span className="w-2 h-2 rounded-full bg-blue-600 shrink-0"></span>
+                      <strong className="text-slate-800 text-xs font-bold leading-relaxed">{prob}</strong>
+                    </div>
+                  ))}
+                </div>
               </div>
-              <div className="space-y-2">
-                {(doc.extractedData?.problems || [
-                  "सीने में भारीपन व बेचैनी (Chest discomfort on brisk exertion)",
-                  "उच्च रक्तचाप की समस्या (Elevated Blood Pressure: 148/92 mmHg)",
-                  "चलने पर सांस फूलना व थकान (Exertional breathlessness)"
-                ]).map((prob, i) => (
-                  <div key={i} className="bg-white p-3 rounded-xl border border-slate-200 flex items-center gap-2.5 shadow-2xs">
-                    <span className="w-2 h-2 rounded-full bg-blue-600 shrink-0"></span>
-                    <strong className="text-slate-800 text-xs font-bold leading-relaxed">{prob}</strong>
-                  </div>
-                ))}
-              </div>
-            </div>
+            )}
 
             {/* Problem-Related Clinical Queries & History */}
-            <div className="bg-blue-50/60 p-4 rounded-2xl border border-blue-200 space-y-2.5">
-              <span className="font-extrabold text-blue-900 uppercase tracking-wider text-[10px] flex items-center gap-1.5">
-                <HelpCircle size={13} className="text-blue-600" />
-                Problem-Related Queries & Clarifications (समस्या से जुड़ी पूछताछ)
-              </span>
-              <div className="space-y-2">
-                {(doc.extractedData?.relatedQueries || [
-                  { query: "तकलीफ कब से है? (Duration / Onset)", detail: "पिछले 10-15 दिनों से, धीरे-धीरे बढ़ रही है" },
-                  { query: "परेशानी कब बढ़ती है? (Aggravating triggers)", detail: "सीढ़ियाँ चढ़ने या भोजन के बाद भारीपन लगता है" },
-                  { query: "क्या आराम करने से राहत मिलती है? (Relieving factor)", detail: "बैठ जाने पर 5-10 मिनट में सुधार होता है" }
-                ]).map((item, i) => (
-                  <div key={i} className="bg-white p-3 rounded-xl border border-blue-100 space-y-1">
-                    <strong className="text-blue-950 text-xs block font-extrabold">{typeof item === 'string' ? item : item.query}</strong>
-                    {typeof item !== 'string' && item.detail && (
-                      <p className="text-[11px] text-slate-600 font-medium">{item.detail}</p>
-                    )}
-                  </div>
-                ))}
+            {doc.extractedData?.relatedQueries && doc.extractedData.relatedQueries.length > 0 && (
+              <div className="bg-blue-50/60 p-4 rounded-2xl border border-blue-200 space-y-2.5">
+                <span className="font-extrabold text-blue-900 uppercase tracking-wider text-[10px] flex items-center gap-1.5">
+                  <HelpCircle size={13} className="text-blue-600" />
+                  Problem-Related Queries & Clarifications (समस्या से जुड़ी पूछताछ)
+                </span>
+                <div className="space-y-2">
+                  {doc.extractedData.relatedQueries.map((item, i) => (
+                    <div key={i} className="bg-white p-3 rounded-xl border border-blue-100 space-y-1">
+                      <strong className="text-blue-950 text-xs block font-extrabold">{typeof item === 'string' ? item : item.query}</strong>
+                      {typeof item !== 'string' && item.detail && (
+                        <span className="text-slate-600 text-[11px] block mt-0.5">{item.detail}</span>
+                      )}
+                    </div>
+                  ))}
+                </div>
               </div>
-            </div>
+            )}
 
             {/* Key Queries For Doctor Consultation */}
             <div className="bg-emerald-50/70 p-4 rounded-2xl border border-emerald-200 space-y-2">

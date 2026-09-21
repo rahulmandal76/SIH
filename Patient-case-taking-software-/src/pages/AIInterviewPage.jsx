@@ -34,7 +34,7 @@ const CLINICAL_STEPS = [
   "Current Medications"
 ];
 
-export const AIInterviewPage = () => {
+export const AIInterviewPage = ({ onNavigate }) => {
   const {
     setActiveTab,
     language,
@@ -307,12 +307,21 @@ export const AIInterviewPage = () => {
         });
       }
       saveInterviewAndGenerateSummary(conversation);
-      if (isDemoMode) nextDemoStep();
-      else setActiveTab("scanner");
+      if (onNavigate) {
+        onNavigate("/kiosk/documents");
+      } else if (isDemoMode) {
+        nextDemoStep();
+      } else {
+        setActiveTab("scanner");
+      }
     } catch (err) {
       console.error("[AIInterview] Submit intake error:", err);
       saveInterviewAndGenerateSummary(conversation);
-      setActiveTab("scanner");
+      if (onNavigate) {
+        onNavigate("/kiosk/documents");
+      } else {
+        setActiveTab("scanner");
+      }
     } finally {
       setIsSubmittingIntake(false);
     }
@@ -351,7 +360,7 @@ export const AIInterviewPage = () => {
                 </span>
               </div>
               <p className="text-xs text-slate-500 font-medium">
-                Patient: <strong className="text-slate-800">{patientData?.name || "Ramesh Sharma"}</strong> ({patientData?.age || 48}Y / {patientData?.gender || "Male"})
+                Patient: <strong className="text-slate-800">{patientData?.name || "Patient"}</strong> ({patientData?.age || 42}Y / {patientData?.gender || "Male"})
               </p>
             </div>
           </div>
@@ -677,7 +686,11 @@ export const AIInterviewPage = () => {
           <button
             onClick={() => {
               saveInterviewAndGenerateSummary(conversation);
-              setActiveTab("scanner");
+              if (onNavigate) {
+                onNavigate("/kiosk/documents");
+              } else {
+                setActiveTab("scanner");
+              }
             }}
             className="bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold text-xs px-4 py-2.5 rounded-xl transition cursor-pointer"
           >
@@ -687,8 +700,13 @@ export const AIInterviewPage = () => {
           <button
             onClick={() => {
               saveInterviewAndGenerateSummary(conversation);
-              if (isDemoMode) nextDemoStep();
-              else setActiveTab("summary");
+              if (onNavigate) {
+                onNavigate("/kiosk/documents");
+              } else if (isDemoMode) {
+                nextDemoStep();
+              } else {
+                setActiveTab("summary");
+              }
             }}
             className="bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white font-black text-xs px-6 py-3 rounded-xl flex items-center gap-2 shadow-lg shadow-blue-500/20 transition transform active:scale-95 cursor-pointer"
           >

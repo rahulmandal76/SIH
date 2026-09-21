@@ -31,16 +31,16 @@ export const LoginPage = ({ initialRole = "doctor", onNavigate }) => {
 
   // Patient Login Form State
   const [patientAuthType, setPatientAuthType] = useState("walkin"); // "abha" or "walkin"
-  const [patientName, setPatientName] = useState("Ramesh Sharma");
-  const [patientAge, setPatientAge] = useState("48");
+  const [patientName, setPatientName] = useState("");
+  const [patientAge, setPatientAge] = useState("42");
   const [patientGender, setPatientGender] = useState("Male");
-  const [patientAbha, setPatientAbha] = useState("91-8842-1092-4402");
-  const [patientMobile, setPatientMobile] = useState("9876543210");
+  const [patientAbha, setPatientAbha] = useState("");
+  const [patientMobile, setPatientMobile] = useState("");
   const [patientLang, setPatientLang] = useState("Hindi");
 
   // Doctor Login Form State
-  const [doctorId, setDoctorId] = useState("dr.sharma@hospital.gov.in");
-  const [doctorPin, setDoctorPin] = useState("DoctorSecure123!");
+  const [doctorId, setDoctorId] = useState("");
+  const [doctorPin, setDoctorPin] = useState("");
   const [doctorChamber, setDoctorChamber] = useState("OPD Chamber #04 - General Medicine");
   const [loginErrorMsg, setLoginErrorMsg] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -301,7 +301,7 @@ export const LoginPage = ({ initialRole = "doctor", onNavigate }) => {
                   type="text"
                   value={patientName}
                   onChange={(e) => setPatientName(e.target.value)}
-                  placeholder="e.g. Ramesh Sharma"
+                  placeholder="e.g. Mr. Rajesh"
                   required
                   className="w-full bg-slate-50 border border-slate-300 p-2.5 rounded-xl text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-blue-500"
                 />

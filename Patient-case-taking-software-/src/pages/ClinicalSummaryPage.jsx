@@ -19,7 +19,7 @@ import {
 } from "lucide-react";
 import { generatePatientPDF } from "../utils/pdfGenerator";
 
-export const ClinicalSummaryPage = () => {
+export const ClinicalSummaryPage = ({ onNavigate }) => {
   const {
     setActiveTab,
     isDemoMode,
@@ -36,16 +36,16 @@ export const ClinicalSummaryPage = () => {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isSubmitted, setIsSubmitted] = useState(false);
   const [isEditingPatient, setIsEditingPatient] = useState(false);
-  const [editName, setEditName] = useState(patientData?.name || "Ramesh Sharma");
-  const [editAge, setEditAge] = useState(patientData?.age?.toString() || "48");
+  const [editName, setEditName] = useState(patientData?.name || "Patient");
+  const [editAge, setEditAge] = useState(patientData?.age?.toString() || "42");
   const [editGender, setEditGender] = useState(patientData?.gender || "Male");
 
   // Current Medications Edit State
   const [isEditingMeds, setIsEditingMeds] = useState(false);
   const [medsList, setMedsList] = useState(
-    Array.isArray(patientData?.caseData?.currentMeds) && patientData.caseData.currentMeds.length > 0
+    Array.isArray(patientData?.caseData?.currentMeds)
       ? patientData.caseData.currentMeds
-      : ["Tab. Amlodipine 5mg OD", "Tab. Paracetamol 650mg SOS"]
+      : []
   );
   const [newMedInput, setNewMedInput] = useState("");
 
@@ -271,7 +271,7 @@ export const ClinicalSummaryPage = () => {
         </div>
 
         <span className="text-[11px] text-slate-500 hidden sm:block font-medium pr-2">
-          Click <strong className="text-emerald-700">"Send to Doctor"</strong> to transmit this case to Dr. Sharma's desk
+          Click <strong className="text-emerald-700">"Send to Doctor"</strong> to transmit this case to the doctor's queue
         </span>
       </div>
 
@@ -290,7 +290,7 @@ export const ClinicalSummaryPage = () => {
             <div className="space-y-1.5">
               <div className="flex items-center gap-2">
                 <span className="bg-blue-900 text-white text-[10px] font-black px-2.5 py-0.5 rounded uppercase tracking-widest">
-                  GOVT. GENERAL HOSPITAL / AIIMS OPD
+                  MEDSYNC CLINICAL CENTER • OPD SERVICES
                 </span>
                 <span className="text-[10px] text-slate-500 font-bold">DEPT. OF GENERAL MEDICINE</span>
               </div>
@@ -491,13 +491,13 @@ export const ClinicalSummaryPage = () => {
             <div className="relative border-2 border-dashed border-slate-300 rounded-2xl p-5 bg-slate-50/50 space-y-3 overflow-hidden">
               {/* Rubber Stamp Graphic */}
               <div className="absolute right-8 top-3 transform -rotate-12 border-4 border-blue-700/60 rounded-xl px-4 py-1.5 text-center pointer-events-none select-none opacity-80">
-                <span className="text-[9px] font-black text-blue-700/80 uppercase tracking-widest block">AIIMS / ABDM INTAKE</span>
+                <span className="text-[9px] font-black text-blue-700/80 uppercase tracking-widest block">MEDSYNC / ABDM INTAKE</span>
                 <span className="text-xs font-black text-blue-800 uppercase tracking-wider block">PRE-TRIAGE VERIFIED</span>
                 <span className="text-[8px] font-bold text-blue-600/70 font-mono block">KIOSK-03 • DIGITALLY LOGGED</span>
               </div>
 
               <span className="font-black text-slate-800 uppercase tracking-wider block text-[11px]">
-                PHYSICIAN CLINICAL ASSESSMENT & RX (DR. SHARMA, OPD CHAMBER #04):
+                PHYSICIAN CLINICAL ASSESSMENT & RX (OPD CONSULTATION DESK):
               </span>
               <div className="h-16 border-b border-slate-200"></div>
               <div className="flex justify-between items-end pt-2 text-[10px] text-slate-400 font-medium">

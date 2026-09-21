@@ -1,19 +1,50 @@
-import React from "react";
+import React, { useState } from "react";
 import { useDemo } from "../context/DemoContext";
 import { AudioPlayer } from "../components/common/AudioPlayer";
-import { ShieldCheck, Lock, CheckCircle2, XCircle, ArrowRight } from "lucide-react";
+import { ShieldCheck, Lock, CheckCircle2, XCircle, ArrowRight, RefreshCw } from "lucide-react";
 
-export const ConsentPage = () => {
-  const { setActiveTab, isDemoMode, nextDemoStep } = useDemo();
+export const ConsentPage = ({ onNavigate }) => {
+  const { setActiveTab, isDemoMode, nextDemoStep, language } = useDemo();
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const consentTextHindi =
     "Hum aapke swasthya se jude sawal puchhenge aur purani medical report scan kar sakte hain. Yeh jankari sirf doctor ke liye tayar ki jayegi taaki aapka ilaaj jaldi ho sake. Aapki jankari surakshit rahegi.";
 
-  const handleConsent = () => {
-    if (isDemoMode) {
-      nextDemoStep();
+  const handleConsent = async () => {
+    setIsSubmitting(true);
+    try {
+      await fetch("/api/intake/consent", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Requested-With": "XMLHttpRequest"
+        },
+        credentials: "include",
+        body: JSON.stringify({
+          consentType: "kiosk_intake_and_ai",
+          granted: true,
+          language: language || "Hindi"
+        })
+      });
+    } catch (err) {
+      console.warn("Consent recording fallback:", err);
+    } finally {
+      setIsSubmitting(false);
+      if (onNavigate) {
+        onNavigate("/kiosk/intake");
+      } else if (isDemoMode) {
+        nextDemoStep();
+      } else {
+        setActiveTab("auth");
+      }
+    }
+  };
+
+  const handleDecline = () => {
+    if (onNavigate) {
+      onNavigate("/kiosk");
     } else {
-      setActiveTab("auth");
+      setActiveTab("kiosk");
     }
   };
 
@@ -73,17 +104,27 @@ export const ConsentPage = () => {
 
           <div className="flex items-center gap-3 w-full sm:w-auto">
             <button
-              onClick={() => alert("Assessment cancelled. Returning to main menu.")}
-              className="px-5 py-3 border border-slate-300 hover:bg-slate-50 text-slate-700 font-bold text-xs rounded-xl transition flex-1 sm:flex-none"
+              onClick={handleDecline}
+              className="px-5 py-3 border border-slate-300 hover:bg-slate-50 text-slate-700 font-bold text-xs rounded-xl transition flex-1 sm:flex-none cursor-pointer"
             >
               Decline
             </button>
             <button
               onClick={handleConsent}
-              className="bg-blue-600 hover:bg-blue-700 text-white font-extrabold px-6 py-3.5 rounded-xl flex items-center justify-center gap-2 shadow-md transition flex-1 sm:flex-none"
+              disabled={isSubmitting}
+              className="bg-blue-600 hover:bg-blue-700 text-white font-extrabold px-6 py-3.5 rounded-xl flex items-center justify-center gap-2 shadow-md transition flex-1 sm:flex-none cursor-pointer disabled:opacity-50"
             >
-              <span>I Understand & Give Consent</span>
-              <ArrowRight size={18} />
+              {isSubmitting ? (
+                <>
+                  <RefreshCw size={18} className="animate-spin" />
+                  <span>Recording Consent...</span>
+                </>
+              ) : (
+                <>
+                  <span>I Understand & Give Consent</span>
+                  <ArrowRight size={18} />
+                </>
+              )}
             </button>
           </div>
         </div>
