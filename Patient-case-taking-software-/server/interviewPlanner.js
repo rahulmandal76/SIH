@@ -7,7 +7,7 @@ import { GoogleGenAI } from "@google/genai";
 export function getIntakeAiConfig() {
   return {
     provider: process.env.INTERVIEW_AI_PROVIDER || process.env.DOCUMENT_AI_PROVIDER || "gemini",
-    model: process.env.INTERVIEW_AI_MODEL || "gemini-3.8-flash",
+    model: process.env.INTERVIEW_AI_MODEL || "gemini-3.5-flash-lite",
     timeoutMs: parseInt(process.env.INTERVIEW_AI_TIMEOUT_MS || process.env.DOCUMENT_AI_TIMEOUT_MS || "15000", 10),
     maxRetries: parseInt(process.env.INTERVIEW_AI_MAX_RETRIES || "2", 10),
     apiKey: process.env.GEMINI_API_KEY || ""
@@ -385,7 +385,9 @@ Based on the patient's actual reported statements, generate the single NEXT ques
         }
 
         const candidateModels = [
-          config.model || "gemini-3.8-flash",
+          config.model || "gemini-3.5-flash-lite",
+          "gemini-3.5-flash-lite",
+          "gemini-flash-lite-latest",
           "gemini-3.8-flash",
           "gemini-flash-latest"
         ];
