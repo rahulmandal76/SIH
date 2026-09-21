@@ -33,7 +33,9 @@
     "test:e2e:browser": "playwright test tests/phase12_browser_e2e.spec.js",
     "test:phase13:live-ai": "node scripts/test_live_gemini.js",
     "test:phase13": "node tests/phase13_production_ai_doctor.test.js",
-    "test:all": "node tests/phase2_database.test.js && node tests/phase3_gateway.test.js && node tests/phase4_identity.test.js && node tests/phase5_interview.test.js && node tests/phase5b_documents.test.js && node tests/phase5c_facts.test.js && node tests/phase5d_vectorstore.test.js && node tests/phase5e_rag.test.js && node tests/phase5f_gateway.test.js && node tests/phase5g_workspace.test.js && node tests/phase12_e2e.test.js"
+    "test:phase13:intake": "node tests/phase13_gemini_intake.test.js",
+    "test:phase13:browser-intake": "node tests/phase13_browser_gemini_intake.mjs",
+    "test:all": "node tests/phase2_database.test.js && node tests/phase3_gateway.test.js && node tests/phase4_identity.test.js && node tests/phase5_interview.test.js && node tests/phase5b_documents.test.js && node tests/phase5c_facts.test.js && node tests/phase5d_vectorstore.test.js && node tests/phase5e_rag.test.js && node tests/phase5f_gateway.test.js && node tests/phase5g_workspace.test.js && node tests/phase12_e2e.test.js && node tests/phase13_gemini_intake.test.js"
   },
   "keywords": [
     "healthcare",

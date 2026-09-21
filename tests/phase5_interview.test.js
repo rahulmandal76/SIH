@@ -16,7 +16,7 @@ import crypto from "crypto";
 import path from "path";
 import { fileURLToPath } from "url";
 import { prisma, disconnectPrisma } from "../prisma/db.js";
-import app from "../Patient-case-taking-software-/server.js";
+import app, { interviewPlanner } from "../Patient-case-taking-software-/server.js";
 import { createEncounterSession } from "../Patient-case-taking-software-/server/sessions.js";
 import { getAdaptiveClinicalResponse } from "../Patient-case-taking-software-/src/utils/clinicalDialogEngine.js";
 
@@ -76,6 +76,27 @@ async function runPhase5ATests() {
       resolve();
     });
   });
+
+  // Inject deterministic Gemini network mock for test boundary (User Rule 7)
+  const testGeminiClient = {
+    models: {
+      generateContent: async ({ contents }) => {
+        const prompt = contents?.[0]?.text || "";
+        const match = prompt.match(/Target Clinical Domain for this Turn:\s*([a-z_]+)/i);
+        const targetDomain = match ? match[1] : "duration_onset";
+
+        return {
+          text: JSON.stringify({
+            questionText: `Clinical assessment inquiry for ${targetDomain}`,
+            questionKey: targetDomain,
+            clinicalDomain: targetDomain,
+            options: ["Option 1", "Option 2"]
+          })
+        };
+      }
+    }
+  };
+  interviewPlanner.setGenAiClient(testGeminiClient);
 
   // Seed deterministic test patients and encounters
   const patientUid1 = "11111111-5555-5555-5555-000000000001";
@@ -758,6 +779,7 @@ async function runPhase5ATests() {
   }
 
   // Teardown
+  interviewPlanner.setGenAiClient(null);
   if (serverInstance) {
     await new Promise(r => serverInstance.close(r));
   }

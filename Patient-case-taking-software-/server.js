@@ -1809,6 +1809,7 @@ const IntakeInterviewStartSchema = z.object({
 const IntakeInterviewStepSchema = z.object({
   sessionId: z.string().min(1).max(100),
   questionKey: z.string().min(1).max(100),
+  questionText: z.string().max(1000).optional(),
   answerText: z.string().max(1000).optional().default(""),
   action: z.enum(["answer", "skip", "unknown"]).optional().default("answer"),
   language: z.enum(["Hindi", "English"]).optional().default("Hindi")
@@ -1870,6 +1871,16 @@ app.post("/api/intake/interview/start", async (req, res) => {
       isExisting: result.isExisting || false
     });
   } catch (err) {
+    if (err.code === "AI_UNAVAILABLE") {
+      logRequest(req, 503, { error: "AI_UNAVAILABLE", details: err.message });
+      return res.status(503).json({
+        error: {
+          code: "AI_UNAVAILABLE",
+          message: "Gemini AI intake assistant is temporarily unavailable. Please retry or continue with direct check-in.",
+          requestId: req.requestId
+        }
+      });
+    }
     logError(req, "PLANNER_ERROR", err.message, err);
     return res.status(500).json({
       error: {
@@ -1903,7 +1914,7 @@ app.post("/api/intake/interview/step", async (req, res) => {
     return ERR.VALIDATION_ERROR(res, "Invalid interview step parameters", { issues: parseResult.error.issues });
   }
 
-  const { sessionId, questionKey, answerText, action, language } = parseResult.data;
+  const { sessionId, questionKey, questionText, answerText, action, language } = parseResult.data;
 
   const sessionRecord = await prisma.interviewSession.findUnique({
     where: { sessionId }
@@ -1925,6 +1936,7 @@ app.post("/api/intake/interview/step", async (req, res) => {
     const result = await interviewPlanner.processStep({
       sessionId,
       questionKey,
+      questionText,
       answerText,
       action,
       language
@@ -1944,6 +1956,16 @@ app.post("/api/intake/interview/step", async (req, res) => {
       reviewSummary: result.reviewSummary || null
     });
   } catch (err) {
+    if (err.code === "AI_UNAVAILABLE") {
+      logRequest(req, 503, { error: "AI_UNAVAILABLE", details: err.message });
+      return res.status(503).json({
+        error: {
+          code: "AI_UNAVAILABLE",
+          message: "Gemini AI intake assistant is temporarily unavailable. Please retry or continue with direct check-in.",
+          requestId: req.requestId
+        }
+      });
+    }
     if (err.code === "INVALID_LIFECYCLE_TRANSITION") {
       logRequest(req, 409, { reason: err.message });
       return ERR.INVALID_LIFECYCLE_TRANSITION(res, err.message);
@@ -4541,5 +4563,5 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   });
 }
 
-export { ocrWorker, documentIngestionService, clinicalFactExtractor };
+export { ocrWorker, documentIngestionService, clinicalFactExtractor, interviewPlanner };
 export default app;

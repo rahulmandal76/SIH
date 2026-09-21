@@ -1,9 +1,23 @@
 import crypto from "crypto";
+import { GoogleGenAI } from "@google/genai";
 
 // --------------------------------------------------------------------------
-// Clinical Domains & Question Templates Registry
+// Runtime Configuration for Production Intake AI
 // --------------------------------------------------------------------------
-const CLINICAL_DOMAINS = [
+export function getIntakeAiConfig() {
+  return {
+    provider: process.env.INTERVIEW_AI_PROVIDER || process.env.DOCUMENT_AI_PROVIDER || "gemini",
+    model: process.env.INTERVIEW_AI_MODEL || process.env.DOCUMENT_AI_MODEL || "gemini-flash-latest",
+    timeoutMs: parseInt(process.env.INTERVIEW_AI_TIMEOUT_MS || process.env.DOCUMENT_AI_TIMEOUT_MS || "15000", 10),
+    maxRetries: parseInt(process.env.INTERVIEW_AI_MAX_RETRIES || "2", 10),
+    apiKey: process.env.GEMINI_API_KEY || ""
+  };
+}
+
+// --------------------------------------------------------------------------
+// Clinical Domains Framework & Guardrails
+// --------------------------------------------------------------------------
+export const CLINICAL_DOMAINS = [
   "duration_onset",
   "severity_character",
   "radiation_spread",
@@ -12,168 +26,23 @@ const CLINICAL_DOMAINS = [
   "current_medications"
 ];
 
-const DOMAIN_QUESTIONS = {
-  CARDIAC_CHEST: {
-    duration_onset: {
-      key: "duration_onset",
-      Hindi: "यह सीने में भारीपन या दर्द कब से शुरू हुआ है और क्या अचानक शुरू हुआ था?",
-      English: "When did this chest discomfort or pain begin, and did it start suddenly?",
-      options: ["आज सुबह से (Since morning)", "2-3 दिन से (2-3 days)", "1 हफ्ते से (Past week)", "काफी समय से (Chronic)"]
-    },
-    severity_character: {
-      key: "severity_character",
-      Hindi: "दर्द कैसा महसूस हो रहा है — भारी दबाव, जलन, या चुभन जैसा? (1 से 10 तक कितना तेज है?)",
-      English: "How does the pain feel — heavy pressure, burning, or sharp? (Scale of 1 to 10)",
-      options: ["भारी दबाव जैसा (Heavy pressure)", "हल्का दर्द (Mild pain)", "तेज असहनीय दर्द (Severe pain)", "गैस / जलन जैसा (Burning/Gas)"]
-    },
-    radiation_spread: {
-      key: "radiation_spread",
-      Hindi: "क्या यह दर्द बाएं हाथ, कंधे, जबड़े या पीठ की तरफ फैलता हुआ महसूस होता है?",
-      English: "Does the pain radiate to your left arm, shoulder, jaw, or back?",
-      options: ["बाएं हाथ में फैलता है (To left arm)", "पीठ / कंधे में (To back/shoulder)", "सिर्फ सीने के बीच में (Chest only)", "गले / जबड़े में (To throat/jaw)"]
-    },
-    aggravating_relieving: {
-      key: "aggravating_relieving",
-      Hindi: "क्या चलने या सीढ़ियां चढ़ने पर दर्द बढ़ता है, और बैठने या आराम करने पर राहत मिलती है?",
-      English: "Does walking or climbing stairs worsen the pain, and does rest relieve it?",
-      options: ["चलने पर बढ़ता है (Worse with exertion)", "आराम से राहत मिलती है (Relieved by rest)", "लगातार बना रहता है (Constant)", "गहरी सांस पर बढ़ता है (Worse on breathing)"]
-    },
-    associated_symptoms: {
-      key: "associated_symptoms",
-      Hindi: "क्या पसीना आना, घबराहट, चक्कर आना या सांस फूलने जैसी तकलीफ भी हो रही है?",
-      English: "Are you also experiencing sweating, palpitations, dizziness, or breathlessness?",
-      options: ["पसीना और घबराहट (Sweating & anxiety)", "सांस फूलती है (Shortness of breath)", "चक्कर आते हैं (Dizziness)", "इनमें से कोई नहीं (None of these)"]
-    },
-    current_medications: {
-      key: "current_medications",
-      Hindi: "क्या आप पहले से बीपी, दिल या खून पतला करने की कोई गोली ले रहे हैं?",
-      English: "Are you currently taking any medications for blood pressure, heart, or blood thinners?",
-      options: ["बीपी की दवा लेते हैं (On BP meds)", "डायबिटीज की दवा (On diabetes meds)", "कोई नियमित दवा नहीं (No regular meds)", "सोरबिट्रेट ली थी (Took Sorbitrate)"]
-    }
-  },
-  RESPIRATORY: {
-    duration_onset: {
-      key: "duration_onset",
-      Hindi: "यह खांसी या सांस की तकलीफ कितने दिनों से चल रही है?",
-      English: "How many days have you had this cough or breathing difficulty?",
-      options: ["2-3 दिन से (2-3 days)", "1 हफ्ते से (Past week)", "2 हफ्ते से ज्यादा (Over 2 weeks)", "महीनों से (Months)"]
-    },
-    severity_character: {
-      key: "severity_character",
-      Hindi: "खांसी सूखी (dry) है या बलगम (phlegm) निकल रहा है? बलगम का रंग कैसा है?",
-      English: "Is the cough dry or are you coughing up phlegm? What color is it?",
-      options: ["सूखी खांसी है (Dry cough)", "सफेद बलगम (White phlegm)", "पीला/हरा बलगम (Yellow/Green phlegm)", "खून के छींटे (Blood-streaked)"]
-    },
-    radiation_spread: {
-      key: "radiation_spread",
-      Hindi: "क्या खांसने पर सीने या पसलियों के दोनों तरफ खिंचाव या दर्द होता है?",
-      English: "Do you feel pain or pulling in your chest or ribs when coughing?",
-      options: ["पसलियों में दर्द (Rib pain)", "गले में तेज जलन (Throat soreness)", "सीने में जकड़न (Chest tightness)", "कोई दर्द नहीं (No pain)"]
-    },
-    aggravating_relieving: {
-      key: "aggravating_relieving",
-      Hindi: "क्या रात के समय, ठंडी हवा में या धूल-धुएं से खांसी ज्यादा बढ़ जाती है?",
-      English: "Does the cough worsen at night, in cold air, or around dust and smoke?",
-      options: ["रात को ज्यादा होती है (Worse at night)", "धूल/ठंड से बढ़ती है (Triggered by dust/cold)", "हर समय एक जैसी (Constant)", "गर्म पानी से आराम (Relieved by warm water)"]
-    },
-    associated_symptoms: {
-      key: "associated_symptoms",
-      Hindi: "क्या इसके साथ बुखार, ठंड लगना, या सीटी जैसी आवाज (wheezing) आ रही है?",
-      English: "Do you have fever, chills, or wheezing sounds while breathing?",
-      options: ["हल्का बुखार है (Mild fever)", "तेज बुखार और ठंड (High fever/chills)", "सांस में सीटी की आवाज (Wheezing)", "सिर्फ खांसी है (Cough only)"]
-    },
-    current_medications: {
-      key: "current_medications",
-      Hindi: "क्या आपने कोई कफ सिरप, इनहेलर या एंटीबायोटिक ली है?",
-      English: "Have you taken any cough syrup, inhaler, or antibiotics?",
-      options: ["कफ सिरप लिया (Took syrup)", "इनहेलर लेते हैं (Use inhaler)", "पैरासिटामोल ली (Took paracetamol)", "कोई दवा नहीं ली (No medication)"]
-    }
-  },
-  GASTROINTESTINAL: {
-    duration_onset: {
-      key: "duration_onset",
-      Hindi: "पेट में यह दर्द या तकलीफ कब से हो रही है?",
-      English: "When did this abdominal pain or stomach upset begin?",
-      options: ["आज सुबह से (Since morning)", "1-2 दिन से (1-2 days)", "1 हफ्ते से (Past week)", "काफी समय से बार-बार (Chronic recurrent)"]
-    },
-    severity_character: {
-      key: "severity_character",
-      Hindi: "दर्द पेट में किस जगह है — ऊपर छाती के पास, नाभि के पास, या पेट के निचले हिस्से में?",
-      English: "Where is the pain located — upper abdomen, around the navel, or lower abdomen?",
-      options: ["ऊपर पेट में (Upper abdomen / Acidity)", "नाभि के पास (Around navel)", "निचले पेट में (Lower abdomen)", "पूरे पेट में मरोड़ (All over cramp)"]
-    },
-    radiation_spread: {
-      key: "radiation_spread",
-      Hindi: "क्या दर्द पेट से पीठ की तरफ या कमर के दोनों तरफ फैलता है?",
-      English: "Does the pain radiate to your back or sides (flanks)?",
-      options: ["पीठ की तरफ जाता है (Radiates to back)", "कमर के दाईं तरफ (Right flank)", "कमर के बाईं तरफ (Left flank)", "सिर्फ पेट में ही है (Abdomen only)"]
-    },
-    aggravating_relieving: {
-      key: "aggravating_relieving",
-      Hindi: "क्या खाना खाने के बाद दर्द बढ़ता है, या खाली पेट ज्यादा जलन होती है?",
-      English: "Does eating worsen the pain, or is it worse on an empty stomach?",
-      options: ["खाना खाने के बाद बढ़ता है (Worse after food)", "खाली पेट ज्यादा जलन (Worse empty stomach)", "दूध/पानी से आराम (Relieved by milk/water)", "मोशन के बाद आराम (Relieved after stool)"]
-    },
-    associated_symptoms: {
-      key: "associated_symptoms",
-      Hindi: "क्या उल्टी, दस्त, खट्टी डकार, या पेट फूला हुआ लग रहा है?",
-      English: "Are you experiencing vomiting, diarrhea, acidity, or abdominal bloating?",
-      options: ["उल्टी जैसा लगता है (Nausea/Vomiting)", "दस्त / लूज मोशन (Diarrhea)", "खट्टी डकार और जलन (Heartburn)", "कब्ज और भारीपन (Constipation/Bloating)"]
-    },
-    current_medications: {
-      key: "current_medications",
-      Hindi: "क्या आपने कोई एंटासिड (जैसे डाइजीन/पेंटोप) या दर्द की गोली ली है?",
-      English: "Have you taken any antacid (like Digene/Pantop) or painkiller?",
-      options: ["गैस की दवा ली (Took antacid)", "दर्द निवारक दवा (Took painkiller)", "ओआरएस / पुदीन हरा (Took ORS/home remedy)", "कुछ नहीं लिया (Nothing taken)"]
-    }
-  },
-  GENERAL: {
-    duration_onset: {
-      key: "duration_onset",
-      Hindi: "यह समस्या कितने समय से चल रही है?",
-      English: "How long have you been experiencing this problem?",
-      options: ["आज से (Since today)", "2-3 दिन से (2-3 days)", "1 हफ्ते से (Past week)", "लंबे समय से (Chronic)"]
-    },
-    severity_character: {
-      key: "severity_character",
-      Hindi: "यह तकलीफ आपके दैनिक काम को कितना प्रभावित कर रही है? (हल्की, मध्यम, या बहुत तेज)",
-      English: "How severe is this issue? Does it interfere with your daily routine?",
-      options: ["हल्की परेशानी (Mild)", "मध्यम तकलीफ (Moderate)", "बहुत तेज असहनीय (Severe)", "रुक-रुक कर होती है (Intermittent)"]
-    },
-    radiation_spread: {
-      key: "radiation_spread",
-      Hindi: "क्या शरीर के किसी और हिस्से में भी दर्द या कमजोरी महसूस हो रही है?",
-      English: "Do you feel pain or weakness spreading to any other part of the body?",
-      options: ["सिर में दर्द (Headache)", "हाथ-पैरों में दर्द (Limb aches)", "कमर में दर्द (Backache)", "कहीं और नहीं (Localized only)"]
-    },
-    aggravating_relieving: {
-      key: "aggravating_relieving",
-      Hindi: "क्या किसी खास काम या समय पर यह तकलीफ बढ़ जाती है?",
-      English: "Does anything specific worsen or relieve this symptom?",
-      options: ["शारीरिक मेहनत से बढ़ता है (Worse on exertion)", "रात में बढ़ता है (Worse at night)", "आराम से ठीक रहता है (Better with rest)", "लगातार एक जैसा (Constant)"]
-    },
-    associated_symptoms: {
-      key: "associated_symptoms",
-      Hindi: "क्या बुखार, कमजोरी, भूख न लगना या वजन घटने जैसी कोई और शिकायत है?",
-      English: "Any other symptoms like fever, fatigue, loss of appetite, or weight loss?",
-      options: ["कमजोरी और थकान (Weakness/Fatigue)", "हल्का बुखार (Mild fever)", "भूख कम लगना (Loss of appetite)", "कोई अन्य लक्षण नहीं (No other symptoms)"]
-    },
-    current_medications: {
-      key: "current_medications",
-      Hindi: "क्या आप किसी बीमारी की नियमित दवा ले रहे हैं या कोई एलर्जी है?",
-      English: "Are you taking regular medications for any chronic condition, or any drug allergies?",
-      options: ["नियमित दवाएं लेते हैं (On regular meds)", "दवा से एलर्जी है (Have drug allergy)", "कोई दवा नहीं (No regular meds)", "पता नहीं (Not sure)"]
-    }
-  }
-};
-
 // --------------------------------------------------------------------------
-// InterviewPlanner: Authoritative Clinical State Machine (Phase 5A Hardened)
+// InterviewPlanner: Real Gemini Runtime Intake Engine with Clinical Guardrails
 // --------------------------------------------------------------------------
 export class InterviewPlanner {
-  constructor(prismaClient) {
+  constructor(prismaClient, options = {}) {
     this.prisma = prismaClient;
     this.MAX_QUESTIONS = 5;
+    this.aiConfig = options.aiConfig || null;
+    this.genAiClient = options.genAiClient || null; // For deterministic test boundary injection
+  }
+
+  setGenAiClient(client) {
+    this.genAiClient = client;
+  }
+
+  getGenAiClient() {
+    return this.genAiClient;
   }
 
   /**
@@ -299,6 +168,61 @@ export class InterviewPlanner {
       covered.add("severity_character");
     }
 
+    // Radiation / Spread mentions
+    if (
+      lower.includes("baayein") ||
+      lower.includes("बाएं") ||
+      lower.includes("arm") ||
+      lower.includes("haath") ||
+      lower.includes("हाथ") ||
+      lower.includes("peeth") ||
+      lower.includes("पीठ") ||
+      lower.includes("back") ||
+      lower.includes("kandhe") ||
+      lower.includes("कंधे") ||
+      lower.includes("shoulder") ||
+      lower.includes("jabde") ||
+      lower.includes("jaw")
+    ) {
+      covered.add("radiation_spread");
+    }
+
+    // Aggravating / Relieving mentions
+    if (
+      lower.includes("chalne") ||
+      lower.includes("चलने") ||
+      lower.includes("seedhi") ||
+      lower.includes("सीढ़ी") ||
+      lower.includes("stairs") ||
+      lower.includes("walk") ||
+      lower.includes("aaram") ||
+      lower.includes("आराम") ||
+      lower.includes("rest") ||
+      lower.includes("khana") ||
+      lower.includes("खाना") ||
+      lower.includes("eating")
+    ) {
+      covered.add("aggravating_relieving");
+    }
+
+    // Associated symptoms mentions
+    if (
+      lower.includes("pasina") ||
+      lower.includes("पसीना") ||
+      lower.includes("sweat") ||
+      lower.includes("ghabrahat") ||
+      lower.includes("घबराहट") ||
+      lower.includes("palpitation") ||
+      lower.includes("chakkar") ||
+      lower.includes("चक्कर") ||
+      lower.includes("dizzy") ||
+      lower.includes("bukhar") ||
+      lower.includes("बुखार") ||
+      lower.includes("fever")
+    ) {
+      covered.add("associated_symptoms");
+    }
+
     // Medication mentions
     if (
       lower.includes("dawa") ||
@@ -341,6 +265,153 @@ export class InterviewPlanner {
   }
 
   /**
+   * Select next uncovered clinical domain based on priority
+   */
+  selectNextDomain(category, coveredSet) {
+    const priority = [
+      "duration_onset",
+      "severity_character",
+      "radiation_spread",
+      "aggravating_relieving",
+      "associated_symptoms",
+      "current_medications"
+    ];
+
+    for (const key of priority) {
+      if (!coveredSet.has(key)) {
+        return key;
+      }
+    }
+    return null; // All core domains covered
+  }
+
+  /**
+   * Core Gemini AI Question Generation
+   * Generates next clinical question adaptively from actual conversation state.
+   * Disallows free-form model reasoning; returns structured question object.
+   */
+  async generateNextQuestionWithGemini({
+    chiefComplaint,
+    conversationHistory = [],
+    latestAnswer = "",
+    coveredDomains = [],
+    complaintCategory = "GENERAL",
+    language = "Hindi",
+    currentStep = 1
+  }) {
+    const config = this.aiConfig || getIntakeAiConfig();
+    const remainingDomains = CLINICAL_DOMAINS.filter(d => !coveredDomains.includes(d));
+    const targetDomain = this.selectNextDomain(complaintCategory, new Set(coveredDomains)) || "associated_symptoms";
+
+    const systemInstruction = `You are the Gemini Clinical Intake AI for an intelligent hospital kiosk.
+Your task is to generate the single NEXT clinical question for a patient check-in interview.
+
+CORE CLINICAL & ETHICAL RULES:
+1. The uploaded/user-provided patient responses are trusted as patient-reported content.
+2. Generate the next question using the actual conversation context and previous patient answers.
+3. Do not invent patient symptoms.
+4. Do not invent patient answers.
+5. Do not assume an unreported symptom.
+6. Do not repeat already answered questions or already covered clinical domains.
+7. Stay strictly within the defined clinical framework (focus on: duration_onset, severity_character, radiation_spread, aggravating_relieving, associated_symptoms, current_medications).
+8. Ask exactly ONE appropriate, concise, and empathetic next question at a time.
+9. Prefer continuity with the latest patient response (e.g. if the patient reports nausea or vomiting, focus your next clinical question directly on that reported symptom).
+10. Preserve the patient's language where appropriate (${language === "English" ? "English" : "natural conversational Hindi/Hinglish"}).
+11. Do not provide a diagnosis as if it were established.
+12. Do not convert AI inference into PATIENT_REPORTED information.
+
+OUTPUT SCHEMA (JSON ONLY):
+{
+  "questionText": "Single clear next clinical question to ask the patient",
+  "questionKey": "${targetDomain}",
+  "clinicalDomain": "${targetDomain}",
+  "options": ["Up to 4 short contextual options for quick tap, or empty array []"]
+}
+DO NOT include any free-form 'reasoning' or chain-of-thought field in the response. Return strictly valid JSON.`;
+
+    const formattedHistory = conversationHistory.map(turn => {
+      const q = turn.questionText || "Initial chief complaint inquiry";
+      const a = turn.answerText || "";
+      const prov = turn.provenance || "PATIENT_REPORTED";
+      return `[Turn ${turn.turnIndex}] Question: "${q}" -> Patient Answer (${prov}): "${a}"`;
+    }).join("\n");
+
+    const userPrompt = `PATIENT INTERVIEW STATE:
+- Primary Chief Complaint (PATIENT_REPORTED): "${chiefComplaint}"
+- Clinical Category: ${complaintCategory}
+- Current Interview Step: ${currentStep} of ${this.MAX_QUESTIONS}
+- Clinical Domains Already Covered: [${coveredDomains.join(", ")}]
+- Clinically Relevant Domains Remaining: [${remainingDomains.join(", ")}]
+- Target Clinical Domain for this Turn: ${targetDomain}
+- Latest Patient Response (PATIENT_REPORTED): "${latestAnswer || chiefComplaint}"
+- Preferred Language: ${language}
+
+FULL CONVERSATION HISTORY TO DATE:
+${formattedHistory || `[Turn 0] Patient Answer (PATIENT_REPORTED): "${chiefComplaint}"`}
+
+TASK:
+Based on the patient's actual reported statements, generate the single NEXT question within the clinical framework targeting ${targetDomain}. Ensure continuity with the latest patient statement.`;
+
+    try {
+      let responseText = "";
+      if (this.genAiClient) {
+        // Injected mock client for tests (requirement 7)
+        const res = await this.genAiClient.models.generateContent({
+          model: config.model,
+          contents: [{ text: userPrompt }],
+          config: {
+            systemInstruction,
+            temperature: 0.2,
+            responseMimeType: "application/json"
+          }
+        });
+        responseText = res.text || "{}";
+      } else {
+        if (!config.apiKey || config.apiKey === "your_gemini_api_key_here") {
+          const err = new Error("AI_UNAVAILABLE: Gemini API key is not configured for production intake");
+          err.code = "AI_UNAVAILABLE";
+          throw err;
+        }
+
+        const ai = new GoogleGenAI({ apiKey: config.apiKey });
+        const res = await ai.models.generateContent({
+          model: config.model,
+          contents: [{ text: userPrompt }],
+          config: {
+            systemInstruction,
+            temperature: 0.2,
+            responseMimeType: "application/json"
+          }
+        });
+        responseText = res.text || "{}";
+      }
+
+      const cleaned = responseText.replace(/```json/gi, "").replace(/```/g, "").trim();
+      const parsed = JSON.parse(cleaned);
+
+      if (!parsed.questionText || typeof parsed.questionText !== "string") {
+        throw new Error("Invalid Gemini response: missing questionText");
+      }
+
+      // Explicitly sanitize output: DO NOT expose or persist reasoning
+      return {
+        questionKey: parsed.questionKey || targetDomain,
+        clinicalDomain: parsed.clinicalDomain || targetDomain,
+        text: parsed.questionText.trim(),
+        options: Array.isArray(parsed.options) ? parsed.options.slice(0, 4) : []
+      };
+    } catch (err) {
+      if (err.code === "AI_UNAVAILABLE") {
+        throw err;
+      }
+      const error = new Error(`AI_UNAVAILABLE: Failed to generate question via Gemini runtime (${err.message})`);
+      error.code = "AI_UNAVAILABLE";
+      error.originalError = err;
+      throw error;
+    }
+  }
+
+  /**
    * Start a new dynamic interview session
    * Idempotent: If an active session exists for this encounterId, returns it without creating a duplicate.
    */
@@ -377,8 +448,17 @@ export class InterviewPlanner {
       }
 
       // Existing in-progress or review_dirty session
-      const nextKey = this.selectNextDomain(existingSession.complaintCategory, allCovered);
-      const nextQuestion = this.getQuestion(existingSession.complaintCategory, nextKey, language);
+      const chiefTurn = existingSession.turns.find(t => t.turnIndex === 0);
+      const lastTurn = existingSession.turns[existingSession.turns.length - 1];
+      const nextQuestion = await this.generateNextQuestionWithGemini({
+        chiefComplaint: chiefTurn?.answerText || "",
+        conversationHistory: existingSession.turns,
+        latestAnswer: lastTurn?.answerText || chiefTurn?.answerText || "",
+        coveredDomains: Array.from(allCovered),
+        complaintCategory: existingSession.complaintCategory,
+        language,
+        currentStep: Math.min(existingSession.totalQuestions + 1, this.MAX_QUESTIONS)
+      });
 
       return {
         sessionId: existingSession.sessionId,
@@ -409,22 +489,29 @@ export class InterviewPlanner {
       }
     });
 
-    // Record initial chief complaint as Turn 0
-    await this.prisma.interviewTurn.create({
+    // Record initial chief complaint as Turn 0 with exact patient-reported provenance
+    const turn0 = await this.prisma.interviewTurn.create({
       data: {
         sessionId,
         turnIndex: 0,
         questionKey: "chief_complaint",
         questionText: "आज आपको क्या तकलीफ है? कृपया अपनी परेशानी बताइए।",
-        answerText: chiefComplaint || "Initial visit check-in",
+        answerText: chiefComplaint || "",
         answerType: "answered",
         provenance: "PATIENT_REPORTED"
       }
     });
 
-    // Select the first uncovered domain
-    const nextKey = this.selectNextDomain(category, preCovered);
-    const questionObj = this.getQuestion(category, nextKey, language);
+    // Generate Turn 1 question genuinely via configured Gemini runtime
+    const questionObj = await this.generateNextQuestionWithGemini({
+      chiefComplaint: chiefComplaint || "",
+      conversationHistory: [turn0],
+      latestAnswer: chiefComplaint || "",
+      coveredDomains: Array.from(preCovered),
+      complaintCategory: category,
+      language,
+      currentStep: 1
+    });
 
     return {
       sessionId: session.sessionId,
@@ -440,54 +527,11 @@ export class InterviewPlanner {
   }
 
   /**
-   * Select next uncovered clinical domain based on priority
-   */
-  selectNextDomain(category, coveredSet) {
-    const priority = [
-      "duration_onset",
-      "severity_character",
-      "radiation_spread",
-      "aggravating_relieving",
-      "associated_symptoms",
-      "current_medications"
-    ];
-
-    for (const key of priority) {
-      if (!coveredSet.has(key)) {
-        return key;
-      }
-    }
-    return null; // All core domains covered
-  }
-
-  /**
-   * Retrieve formatted question with quick options
-   */
-  getQuestion(category, key, language = "Hindi") {
-    if (!key) return null;
-    const catQuestions = DOMAIN_QUESTIONS[category] || DOMAIN_QUESTIONS.GENERAL;
-    const qData = catQuestions[key] || DOMAIN_QUESTIONS.GENERAL[key];
-
-    if (!qData) {
-      return {
-        questionKey: key,
-        text: language === "English" ? "Could you describe this symptom in more detail?" : "क्या आप इस तकलीफ के बारे में थोड़ा और विस्तार से बता सकते हैं?",
-        options: ["हाँ, बिल्कुल", "नहीं, इतना ही है", "पता नहीं", "छोड़ें (Skip)"]
-      };
-    }
-
-    return {
-      questionKey: key,
-      text: language === "English" ? qData.English : qData.Hindi,
-      options: qData.options
-    };
-  }
-
-  /**
    * Process patient response (answer, skip, or unknown / "Pata Nahi")
    * Idempotent on retries; strictly enforces lifecycle boundaries.
+   * Generates the next question genuinely via Gemini runtime.
    */
-  async processStep({ sessionId, questionKey, answerText, action = "answer", language = "Hindi" }) {
+  async processStep({ sessionId, questionKey, questionText, answerText, action = "answer", language = "Hindi" }) {
     const session = await this.prisma.interviewSession.findUnique({
       where: { sessionId },
       include: { turns: { orderBy: { turnIndex: "asc" } } }
@@ -541,9 +585,22 @@ export class InterviewPlanner {
         data: { answerText: finalAnswerText, answerType, provenance }
       });
 
-      const allCovered = this.detectAllCoveredDimensions(session.turns);
-      const nextKey = this.selectNextDomain(session.complaintCategory, allCovered);
-      const nextQuestion = this.getQuestion(session.complaintCategory, nextKey, language);
+      const allTurns = await this.prisma.interviewTurn.findMany({
+        where: { sessionId },
+        orderBy: { turnIndex: "asc" }
+      });
+      const allCovered = this.detectAllCoveredDimensions(allTurns);
+      const chiefTurn = allTurns.find(t => t.turnIndex === 0);
+
+      const nextQuestion = await this.generateNextQuestionWithGemini({
+        chiefComplaint: chiefTurn?.answerText || "",
+        conversationHistory: allTurns,
+        latestAnswer: finalAnswerText,
+        coveredDomains: Array.from(allCovered),
+        complaintCategory: session.complaintCategory,
+        language,
+        currentStep: Math.min(session.totalQuestions + 1, this.MAX_QUESTIONS)
+      });
 
       return {
         sessionId,
@@ -558,15 +615,14 @@ export class InterviewPlanner {
     }
 
     const nextTurnIndex = session.turns.length;
-    const currentQData = this.getQuestion(session.complaintCategory, questionKey, language);
 
-    // Record new turn in database
+    // Record new turn in database with exact verbatim answer and provenance
     await this.prisma.interviewTurn.create({
       data: {
         sessionId,
         turnIndex: nextTurnIndex,
         questionKey: questionKey || "followup",
-        questionText: currentQData?.text || "Clinical assessment question",
+        questionText: questionText || `Clinical inquiry for ${questionKey || "symptom"}`,
         answerText: finalAnswerText,
         answerType,
         provenance
@@ -588,10 +644,14 @@ export class InterviewPlanner {
         covered.add(d);
       }
     }
+    if (finalAnswerText && answerType === "answered") {
+      for (const d of this.detectPreCoveredDimensions(finalAnswerText)) {
+        covered.add(d);
+      }
+    }
 
-    // Termination criteria: max 5 questions reached, or all core domains covered
-    const nextKey = this.selectNextDomain(session.complaintCategory, covered);
-    const isTerminated = newQuestionCount >= this.MAX_QUESTIONS || nextKey === null;
+    // Termination criteria: max 5 questions reached
+    const isTerminated = newQuestionCount >= this.MAX_QUESTIONS;
 
     if (isTerminated) {
       await this.prisma.interviewSession.update({
@@ -616,13 +676,29 @@ export class InterviewPlanner {
       };
     }
 
+    // Prepare updated turn history for Gemini
+    const allTurns = await this.prisma.interviewTurn.findMany({
+      where: { sessionId },
+      orderBy: { turnIndex: "asc" }
+    });
+    const chiefTurn = allTurns.find(t => t.turnIndex === 0);
+
     // Advance session in DB
     await this.prisma.interviewSession.update({
       where: { sessionId },
       data: { totalQuestions: newQuestionCount }
     });
 
-    const nextQuestion = this.getQuestion(session.complaintCategory, nextKey, language);
+    // Generate next question with real Gemini runtime
+    const nextQuestion = await this.generateNextQuestionWithGemini({
+      chiefComplaint: chiefTurn?.answerText || "",
+      conversationHistory: allTurns,
+      latestAnswer: finalAnswerText,
+      coveredDomains: Array.from(covered),
+      complaintCategory: session.complaintCategory,
+      language,
+      currentStep: newQuestionCount + 1
+    });
 
     return {
       sessionId,
@@ -793,10 +869,10 @@ export class InterviewPlanner {
 
     // Build synthesized narrative HPI from validated turns
     const turns = session.turns.filter(t => t.answerType === "answered" && t.answerText && !t.answerText.startsWith("["));
-    const chiefComplaint = session.turns.find(t => t.turnIndex === 0)?.answerText || "Clinical visit";
+    const chiefComplaint = session.turns.find(t => t.turnIndex === 0)?.answerText || null;
 
     const hpiLines = turns.map(t => `${t.questionText}: ${t.answerText}`);
-    const hpiNarrative = hpiLines.join("\n");
+    const hpiNarrative = hpiLines.length > 0 ? hpiLines.join("\n") : null;
 
     const medTurn = session.turns.find(t => t.questionKey === "current_medications" && t.answerType === "answered");
     const currentMedsJson = medTurn?.answerText ? JSON.stringify([medTurn.answerText]) : null;
@@ -806,7 +882,7 @@ export class InterviewPlanner {
       this.prisma.encounter.updateMany({
         where: { encounterId: session.encounterId },
         data: {
-          chiefComplaint,
+          chiefComplaint: chiefComplaint || "General check-in",
           hpi: hpiNarrative,
           currentMedsJson,
           intakeConversation: JSON.stringify(session.turns)

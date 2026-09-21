@@ -21,9 +21,8 @@ import {
   X,
   FileText
 } from "lucide-react";
-// Phase 5A: Authoritative state machine on backend (/api/intake/interview/*)
-// Local clinicalDialogEngine preserved as authoritative offline fallback
-import { getAdaptiveClinicalResponse } from "../utils/clinicalDialogEngine";
+// Phase 13: Genuinely Gemini AI-driven clinical intake (/api/intake/interview/*)
+// Zero dummy questions, zero synthetic answers, honest AI_UNAVAILABLE handling
 
 const CLINICAL_STEPS = [
   "Chief Complaint",
@@ -53,7 +52,7 @@ export const AIInterviewPage = ({ onNavigate }) => {
   const [currentStep, setCurrentStep] = useState(0);
   const [totalQuestions, setTotalQuestions] = useState(5);
 
-  // Phase 5A Interview Session & State Machine
+  // Phase 13 Gemini Interview Session & State Machine
   const [sessionId, setSessionId] = useState(null);
   const [currentQuestionKey, setCurrentQuestionKey] = useState(null);
   const [isComplete, setIsComplete] = useState(false);
@@ -63,18 +62,16 @@ export const AIInterviewPage = ({ onNavigate }) => {
   const [editText, setEditText] = useState("");
   const [isSubmittingIntake, setIsSubmittingIntake] = useState(false);
 
-  const [dynamicOptions, setDynamicOptions] = useState([
-    "सीने में भारीपन / दबाव है",
-    "खांसी और सांस लेने में तकलीफ",
-    "पेट में तेज दर्द / गैस",
-    "बुखार और शरीर में कमजोरी"
-  ]);
+  // Dynamic options populated only when Gemini provides contextual choices
+  const [dynamicOptions, setDynamicOptions] = useState([]);
   const chatEndRef = useRef(null);
 
   const [conversation, setConversation] = useState([
     {
       sender: "ai",
-      text: `नमस्ते ${patientData?.name ? patientData.name.split(" ")[0] : ""} जी! आज आपको क्या तकलीफ है? कृपया अपनी मुख्य परेशानी बताइए।`,
+      text: language === "English"
+        ? `Hello ${patientData?.name ? patientData.name.split(" ")[0] : ""}! What health concerns are bringing you in today? Please describe your main symptoms.`
+        : `नमस्ते ${patientData?.name ? patientData.name.split(" ")[0] : ""} जी! आज आपको क्या तकलीफ है? कृपया अपनी मुख्य परेशानी बताइए।`,
       time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
     }
   ]);
@@ -89,9 +86,9 @@ export const AIInterviewPage = ({ onNavigate }) => {
   };
 
   /**
-   * handleStepAction — Dispatches turn to Phase 5A authoritative backend state machine
+   * handleStepAction — Dispatches turn to Gemini AI intake runtime
    * Supports 'answer', 'skip', and 'unknown' ("Pata Nahi")
-   * Falls back gracefully to clinicalDialogEngine if server/network is offline
+   * Truthful AI_UNAVAILABLE on errors (ZERO dummy fallback questions)
    */
   const handleStepAction = async (actionType = "answer", textValue = null) => {
     const text = textValue !== null ? textValue : inputText;
@@ -100,8 +97,8 @@ export const AIInterviewPage = ({ onNavigate }) => {
 
     const timeStr = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
     let patientDisplay = text;
-    if (actionType === "skip") patientDisplay = "छोड़ें (Skip)";
-    else if (actionType === "unknown") patientDisplay = "पता नहीं (Pata Nahi / Don't Know)";
+    if (actionType === "skip") patientDisplay = language === "English" ? "Skip" : "छोड़ें (Skip)";
+    else if (actionType === "unknown") patientDisplay = language === "English" ? "Don't know" : "पता नहीं (Pata Nahi / Don't Know)";
 
     const updatedConv = [...conversation, { sender: "patient", text: patientDisplay, time: timeStr }];
     setConversation(updatedConv);
@@ -148,7 +145,9 @@ export const AIInterviewPage = ({ onNavigate }) => {
                 const c = [...prev];
                 c[c.length - 1] = {
                   sender: "ai",
-                  text: "धन्यवाद! आपकी प्राथमिक जानकारी दर्ज कर ली गई है। कृपया नीचे दी गई समरी की जांच करें।",
+                  text: language === "English"
+                    ? "Thank you! Your initial information has been recorded. Please review the summary below."
+                    : "धन्यवाद! आपकी प्राथमिक जानकारी दर्ज कर ली गई है। कृपया नीचे दी गई समरी की जांच करें।",
                   time: aiTime,
                   streaming: false
                 };
@@ -173,6 +172,27 @@ export const AIInterviewPage = ({ onNavigate }) => {
             setIsThinking(false);
             return;
           }
+        } else {
+          // Explicit truthful AI_UNAVAILABLE handling
+          const errData = await startRes.json().catch(() => ({}));
+          const isUnavailable = startRes.status === 503 || errData.error?.code === "AI_UNAVAILABLE";
+          setIsThinking(false);
+          setConversation(prev => {
+            const c = [...prev];
+            c[c.length - 1] = {
+              sender: "ai",
+              isUnavailable: true,
+              text: isUnavailable
+                ? (language === "English"
+                    ? "⚠️ [AI Unavailable] The Gemini AI intake assistant is temporarily offline. Production intake will not fabricate questions. Please retry or continue directly to registration."
+                    : "⚠️ [AI सेवा अनुपलब्ध] जेमिनी AI क्लिनिकल असिस्टेंट वर्तमान में अनुपलब्ध है। कृपया पुनः प्रयास करें या सीधे रजिस्ट्रेशन के लिए आगे बढ़ें।")
+                : (errData.error?.message || "Failed to contact intake assistant. Please retry."),
+              time: aiTime,
+              streaming: false
+            };
+            return c;
+          });
+          return;
         }
       } else {
         // 2. Subsequent turns: Step the authoritative interview state machine
@@ -205,7 +225,9 @@ export const AIInterviewPage = ({ onNavigate }) => {
                 const c = [...prev];
                 c[c.length - 1] = {
                   sender: "ai",
-                  text: "बहुत बढ़िया! आपके सभी मुख्य लक्षणों का विवरण सफलतापूर्वक दर्ज हो गया है। कृपया नीचे दिए गए रिव्यू में अपने उत्तर जांच लें।",
+                  text: language === "English"
+                    ? "Great! All key symptoms have been recorded. Please verify your responses in the review below."
+                    : "बहुत बढ़िया! आपके सभी मुख्य लक्षणों का विवरण सफलतापूर्वक दर्ज हो गया है। कृपया नीचे दिए गए रिव्यू में अपने उत्तर जांच लें।",
                   time: aiTime,
                   streaming: false
                 };
@@ -230,28 +252,47 @@ export const AIInterviewPage = ({ onNavigate }) => {
             setIsThinking(false);
             return;
           }
+        } else {
+          // Explicit truthful AI_UNAVAILABLE handling
+          const errData = await stepRes.json().catch(() => ({}));
+          const isUnavailable = stepRes.status === 503 || errData.error?.code === "AI_UNAVAILABLE";
+          setIsThinking(false);
+          setConversation(prev => {
+            const c = [...prev];
+            c[c.length - 1] = {
+              sender: "ai",
+              isUnavailable: true,
+              text: isUnavailable
+                ? (language === "English"
+                    ? "⚠️ [AI Unavailable] The Gemini AI intake assistant is temporarily offline. Production intake will not fabricate questions. Please retry or continue directly to registration."
+                    : "⚠️ [AI सेवा अनुपलब्ध] जेमिनी AI क्लिनिकल असिस्टेंट वर्तमान में अनुपलब्ध है। कृपया पुनः प्रयास करें या सीधे रजिस्ट्रेशन के लिए आगे बढ़ें।")
+                : (errData.error?.message || "Failed to process interview step. Please retry."),
+              time: aiTime,
+              streaming: false
+            };
+            return c;
+          });
+          return;
         }
       }
     } catch (err) {
-      console.warn("[AIInterview] Gateway interview step unavailable; engaging offline clinicalDialogEngine:", err.message);
+      console.warn("[AIInterview] Gateway network error:", err.message);
+      setIsThinking(false);
+      setConversation(prev => {
+        const copy = [...prev];
+        copy[copy.length - 1] = {
+          sender: "ai",
+          isUnavailable: true,
+          text: language === "English"
+            ? "⚠️ [Connection Error] Unable to connect to the Gemini AI intake service. Please retry or proceed with manual registration."
+            : "⚠️ [कनेक्शन त्रुटि] AI असिस्टेंट से संपर्क नहीं हो पाया। कृपया पुनः प्रयास करें या सीधे रजिस्ट्रेशन के लिए आगे बढ़ें।",
+          time: aiTime,
+          streaming: false
+        };
+        return copy;
+      });
+      return;
     }
-
-    // 3. Offline fallback to local clinicalDialogEngine
-    const nextStepIdx = Math.min(currentStep + 1, CLINICAL_STEPS.length - 1);
-    setCurrentStep(nextStepIdx);
-    const fallback = getAdaptiveClinicalResponse(text, updatedConv, nextStepIdx);
-    setIsThinking(false);
-    setConversation(prev => {
-      const copy = [...prev];
-      copy[copy.length - 1] = {
-        sender: "ai",
-        text: fallback.text,
-        time: aiTime,
-        streaming: false
-      };
-      return copy;
-    });
-    setDynamicOptions(fallback.options);
   };
 
   /**

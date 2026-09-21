@@ -178,9 +178,9 @@ export const DemoProvider = ({ children }) => {
       .filter((m) => m.sender === "patient")
       .map((m) => m.text);
 
-    const chiefComplaint = patientReplies[0] || "Chest discomfort with restlessness";
-    const duration = patientReplies[1] || "Last 2 days";
-    const painLocation = patientReplies[2] || "Left-sided radiation";
+    const chiefComplaint = patientReplies[0] || (patientData.chiefComplaint !== "Awaiting AI Clinical Intake" ? patientData.chiefComplaint : null);
+    const duration = patientReplies[1] || null;
+    const painLocation = patientReplies[2] || null;
 
     // Detect red flags in actual patient responses
     const allPatientText = patientReplies.join(" ").toLowerCase();
@@ -215,34 +215,46 @@ export const DemoProvider = ({ children }) => {
       detectedMeds.push("Tab. Ecosprin 75mg OD");
     }
 
-    // Preserve previously scanned OCR meds or use detected / standard default
+    // Preserve previously scanned OCR meds or use detected (never fabricate default medications)
     const existingMeds = Array.isArray(patientData.caseData?.currentMeds) ? patientData.caseData.currentMeds : [];
     const resolvedMeds = detectedMeds.length > 0
       ? Array.from(new Set([...existingMeds, ...detectedMeds]))
-      : (existingMeds.length > 0 ? existingMeds : ["Tab. Amlodipine 5mg OD", "Tab. Paracetamol 650mg SOS"]);
+      : existingMeds;
+
+    // Build truthful HPI
+    const hpiParts = [];
+    if (chiefComplaint) hpiParts.push(`Patient reported: "${chiefComplaint}"`);
+    if (duration) hpiParts.push(`Duration/Onset: ${duration}`);
+    if (painLocation) hpiParts.push(`Location/Characteristics: ${painLocation}`);
+    const hpiNarrative = hpiParts.length > 0 ? hpiParts.join(". ") : null;
+
+    // Only set pastHistory if patient reported it
+    let resolvedPastHistory = null;
+    if (allPatientText.includes("sugar") || allPatientText.includes("diabetes")) {
+      resolvedPastHistory = "Diabetes Mellitus Reported";
+    } else if (allPatientText.includes("bp") || allPatientText.includes("hypertension") || allPatientText.includes("blood pressure")) {
+      resolvedPastHistory = "Hypertension Reported";
+    }
 
     const updatedPatient = {
       ...patientData,
       token: nextTokenNum.toString(),
-      chiefComplaint: chiefComplaint,
+      chiefComplaint: chiefComplaint || "General check-in",
       priority: isRedFlag ? "High Priority" : "Normal",
       triageReason: isRedFlag
-        ? "Acute Chest Pain / Radiation detected by Medical Chatbot"
+        ? "Acute Red-Flag Symptom detected in patient intake"
         : "Standard OPD Intake",
       historyStatus: "Complete (AI Verified)",
       consultationStatus: "incomplete",
       conversation: conversation,
       caseData: {
         ...patientData.caseData,
-        hpi: `Patient reported: "${chiefComplaint}". Duration/Onset: ${duration}. Location/Characteristics: ${painLocation}. AI clinical triage conducted in ${language}.`,
-        pastHistory:
-          allPatientText.includes("sugar") || allPatientText.includes("diabetes")
-            ? "Diabetes Mellitus (Type 2), Hypertension"
-            : "Essential Hypertension (Stage 1), No known diabetes",
+        hpi: hpiNarrative,
+        pastHistory: resolvedPastHistory,
         currentMeds: resolvedMeds,
         allergies: allPatientText.includes("allergy")
-          ? ["Penicillin Allergy Reported"]
-          : ["NKDA (No Known Drug Allergies)"]
+          ? ["Allergy Reported by Patient"]
+          : []
       }
     };
 
