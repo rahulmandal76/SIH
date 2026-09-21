@@ -5,7 +5,7 @@ services:
   - type: web
     name: medsync-api
     runtime: node
-    plan: starter
+    plan: free
     buildCommand: npm install && cd Patient-case-taking-software- && npm install && npm run build && cd .. && npx prisma generate --schema=prisma/schema.prisma
     startCommand: node Patient-case-taking-software-/server.js
     healthCheckPath: /api/health/live
@@ -46,7 +46,7 @@ services:
   - type: web
     name: medsync-rag
     runtime: python
-    plan: starter
+    plan: free
     buildCommand: pip install -r services/rag_service/requirements.txt
     startCommand: uvicorn services.rag_service.main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /health
@@ -68,4 +68,4 @@ databases:
   - name: medsync-db
     databaseName: medsync
     user: medsync
-    plan: starter
+    plan: free
