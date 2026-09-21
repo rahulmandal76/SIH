@@ -7,7 +7,9 @@
   "scripts": {
     "dev:web": "npm --prefix Patient-case-taking-software- run dev",
     "dev:api": "node Patient-case-taking-software-/server.js",
+    "dev:rag": "uvicorn services.rag_service.main:app --host 127.0.0.1 --port 8000 --reload",
     "dev:streamlit": "streamlit run \"aiml-crash-yash-verma-Aurahealth_final_project (1)/aiml-crash-yash-verma-Aurahealth_final_project/app.py\"",
+    "dev:all": "concurrently --kill-others-on-fail --names \"API,WEB,RAG\" --prefix-colors \"cyan,magenta,yellow\" \"npm run dev:api\" \"npm run dev:web\" \"npm run dev:rag\"",
     "build:web": "npm --prefix Patient-case-taking-software- run build",
     "test:docs": "node -e \"console.log('Docs verified: 18 specifications present.')\"",
     "prisma:version": "prisma -v",
@@ -57,6 +59,7 @@
     "zod": "^3.25.0"
   },
   "devDependencies": {
-    "@playwright/test": "^1.63.0"
+    "@playwright/test": "^1.63.0",
+    "concurrently": "10.0.5"
   }
 }
